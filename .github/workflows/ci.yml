@@ -34,36 +34,31 @@ jobs:
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Format check
-      run: cargo fmt --all -- --check
+      run: cargo fmt --check
 
     - name: Clippy (no warnings)
       run: cargo clippy --workspace --all-targets -- -D warnings
 
     - name: Check
-      run: cargo check --workspace --verbose
+      run: cargo check --workspace
 
     - name: Build
-      run: cargo build --workspace --verbose
+      run: cargo build --workspace
 
     - name: Unit tests
-      run: cargo test --workspace --verbose
+      run: cargo test --workspace --lib
+
+    - name: Golden validation tests
+      run: cargo test -p fox-analysis --test golden_validation
+
+    - name: Ground truth validation tests
+      run: cargo test -p fox-analysis --test ground_truth_validation
 
     - name: Robustness tests
-      run: cargo test -p fox-analysis --test robustness --verbose
+      run: cargo test -p fox-analysis --test robustness
 
-    - name: Integration tests
-      run: cargo test --test '*' --verbose
+    - name: P0-3.4R Negative tests
+      run: cargo test -p fox-analysis --test p0_3_4r_negative_tests
 
-    - name: Build golden samples
-      run: cd samples && cargo build --release
-      continue-on-error: true
-
-    - name: Golden tests
-      run: cargo test --test golden --verbose
-      continue-on-error: true
-
-  # Future jobs (P0-2+):
-  # fuzz:
-  # sanitizer:
-  # regression:
-  # benchmark:
+    - name: Full test suite
+      run: cargo test --workspace

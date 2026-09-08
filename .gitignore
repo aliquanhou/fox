@@ -2,8 +2,12 @@
 /target
 **/target
 
-# Ground truth build artifacts (binaries and metadata are generated)
-/tests/ground_truth/binaries/
+# Ground truth build artifacts
+# .exe files are committed as test fixtures for CI
+/tests/ground_truth/binaries/*.ilk
+/tests/ground_truth/binaries/*.pdb
+/tests/ground_truth/binaries/*.exp
+/tests/ground_truth/binaries/*.lib
 /tests/ground_truth/metadata/
 
 # IDE
