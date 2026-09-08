@@ -21,7 +21,8 @@ fn load_test_binary(name: &str) -> Binary {
         .join("ground_truth")
         .join("binaries")
         .join(name);
-    let data = std::fs::read(&path).unwrap_or_else(|_| panic!("Failed to read test binary: {:?}", path));
+    let data =
+        std::fs::read(&path).unwrap_or_else(|_| panic!("Failed to read test binary: {:?}", path));
     Binary::load(data).expect("Failed to parse binary")
 }
 
