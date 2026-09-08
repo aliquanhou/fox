@@ -164,6 +164,47 @@ impl AnalysisPipeline {
                 )),
         );
 
+        // === Thunk optimization: skip SSA/DataFlow for <=2 instruction functions ===
+        // These are CRT/runtime thunks (JMP/CALL/RET) with no meaningful dataflow.
+        // IR and Evidence are still recorded. This does not change any analysis result.
+        let total_instructions: usize = ir.basic_blocks.iter().map(|b| b.instructions.len()).sum();
+
+        if total_instructions <= 2 {
+            let memory = Some(Self::mount_memory_analysis(&ir));
+            let instructions: Vec<fox_disasm::Instruction> = func_cfg
+                .blocks
+                .iter()
+                .flat_map(|b| b.instructions.clone())
+                .collect();
+            evidence.push(
+                Evidence::new(EvidenceKind::DataFlowAnalysis)
+                    .with_address(func.value.address.0)
+                    .with_weight(0.5)
+                    .with_detail(format!(
+                        "Thunk function ({} instructions): SSA/DataFlow skipped",
+                        total_instructions
+                    )),
+            );
+            return FunctionAnalysisContext {
+                function_address: func.value.address.0,
+                function_name: func.value.name.clone(),
+                confidence_tier: func.value.confidence_tier,
+                instructions,
+                ir,
+                ssa: None,
+                dataflow: None,
+                memory,
+                evidence,
+                timing: PipelineTiming {
+                    ir_generation_ms: ir_ms,
+                    ssa_construction_ms: 0,
+                    dataflow_ms: 0,
+                    memory_analysis_ms: 0,
+                    total_ms: func_start.elapsed().as_millis(),
+                },
+            };
+        }
+
         // === Phase 4: SSA Construction (existing register SSA, no changes) ===
         let ssa_start = Instant::now();
         let ssa = Some(crate::ssa::SSAConstructor::construct_proper(&ir));

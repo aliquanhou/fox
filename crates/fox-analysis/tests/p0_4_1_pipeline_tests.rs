@@ -39,12 +39,13 @@ fn test_pipeline_basic_execution() {
     );
 
     // At least one function should have full analysis context
+    // (thunk functions with <=2 instructions may skip SSA/DataFlow)
     let ctx = result
         .pipeline
         .function_analysis
         .values()
-        .next()
-        .expect("At least one function analysis context");
+        .find(|c| c.ssa.is_some() && c.dataflow.is_some())
+        .expect("At least one function should have full SSA + DataFlow analysis");
 
     // IR must be present
     assert!(
@@ -84,12 +85,13 @@ fn test_pipeline_isolation() {
     let binary = load_test_binary("02_if_else_O0.exe");
     let result = analyze_binary(&binary);
 
-    // Need at least 2 functions with pipeline analysis
+    // Need at least 2 functions with full pipeline analysis (SSA + DataFlow)
+    // (thunk functions with <=2 instructions may skip SSA/DataFlow)
     let contexts: Vec<&FunctionAnalysisContext> = result
         .pipeline
         .function_analysis
         .values()
-        .filter(|c| !c.ir.basic_blocks.is_empty())
+        .filter(|c| c.ssa.is_some() && c.dataflow.is_some())
         .take(3)
         .collect();
 
@@ -187,13 +189,14 @@ fn test_pipeline_evidence_chain() {
     let binary = load_test_binary("01_linear_O0.exe");
     let result = analyze_binary(&binary);
 
-    // Find a function with pipeline analysis
+    // Find a function with full pipeline analysis (SSA + DataFlow)
+    // (thunk functions with <=2 instructions may skip SSA/DataFlow)
     let ctx = result
         .pipeline
         .function_analysis
         .values()
-        .find(|c| !c.ir.basic_blocks.is_empty())
-        .expect("At least one function with IR");
+        .find(|c| c.ssa.is_some() && c.dataflow.is_some())
+        .expect("At least one function should have full SSA + DataFlow analysis");
 
     // Evidence must reference the function address
     assert!(
