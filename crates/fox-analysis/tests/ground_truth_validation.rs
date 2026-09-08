@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct GroundTruthFunction {
     name: String,
     start_va: String, // hex
@@ -17,6 +18,7 @@ struct GroundTruthFunction {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct GroundTruthFixture {
     sample_name: String,
     expected_function_count: usize,
@@ -25,7 +27,7 @@ struct GroundTruthFixture {
 
 fn parse_hex(s: &str) -> u64 {
     let s = s.trim_start_matches("0x").trim_start_matches("0X");
-    u64::from_str_radix(s, 16).expect(&format!("invalid hex: {}", s))
+    u64::from_str_radix(s, 16).unwrap_or_else(|_| panic!("invalid hex: {}", s))
 }
 
 fn ground_truth_dir() -> PathBuf {
@@ -91,7 +93,7 @@ fn compare_boundaries(sample: &str) -> BoundaryResult {
             .value
             .end_address
             .map(|a| a.0)
-            .or_else(|| func.value.validation.estimated_end);
+            .or(func.value.validation.estimated_end);
         fox_addrs.insert(addr, end);
     }
 
@@ -145,7 +147,7 @@ fn compare_boundaries(sample: &str) -> BoundaryResult {
         })
         .unwrap_or(0);
 
-    for (fox_addr, _) in &fox_addrs {
+    for fox_addr in fox_addrs.keys() {
         if *fox_addr >= gt_min && *fox_addr <= gt_max && !gt_map.contains_key(fox_addr) {
             fp += 1;
         }

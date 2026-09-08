@@ -136,6 +136,12 @@ pub enum EvidenceKind {
     TailCall,
     /// Function found in .pdata exception metadata (x64 authoritative)
     PdataEntry,
+    /// Jump table pattern detected (switch dispatch)
+    JumpTablePattern,
+    /// Jump table target resolved
+    JumpTableTarget,
+    /// Function reached via thunk/JMP chain
+    ThunkTarget,
 }
 
 impl fmt::Display for EvidenceKind {
@@ -206,6 +212,9 @@ impl fmt::Display for EvidenceKind {
             }
             EvidenceKind::TailCall => write!(f, "Tail call detected"),
             EvidenceKind::PdataEntry => write!(f, "Function in .pdata exception metadata"),
+            EvidenceKind::JumpTablePattern => write!(f, "Jump table pattern detected"),
+            EvidenceKind::JumpTableTarget => write!(f, "Jump table target resolved"),
+            EvidenceKind::ThunkTarget => write!(f, "Function reached via thunk/JMP chain"),
         }
     }
 }

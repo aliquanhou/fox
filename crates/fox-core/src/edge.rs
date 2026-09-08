@@ -23,6 +23,8 @@ pub enum EdgeKind {
     Return,
     /// Indirect jump (target unknown or computed)
     IndirectJump,
+    /// Jump table edge (resolved from switch dispatch)
+    JumpTable,
     /// Indirect call (target unknown or computed)
     IndirectCall,
     /// Unknown control flow (cannot classify)
@@ -39,6 +41,7 @@ impl EdgeKind {
             EdgeKind::Call => "Call",
             EdgeKind::Return => "Return",
             EdgeKind::IndirectJump => "IndirectJump",
+            EdgeKind::JumpTable => "JumpTable",
             EdgeKind::IndirectCall => "IndirectCall",
             EdgeKind::Unknown => "Unknown",
         }

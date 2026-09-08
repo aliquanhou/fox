@@ -3,19 +3,19 @@
     "source_file":  "07_switch.rs",
     "compiler":  "rustc",
     "compiler_version":  "1.98.1",
-    "optimization":  "release (opt-level=0)",
+    "optimization":  "release",
     "architecture":  "x64",
-    "function_count":  529,
+    "function_count":  531,
     "function_names":  [
 
                        ],
-    "basic_block_count":  8308,
-    "cfg_edge_count":  13318,
+    "basic_block_count":  8311,
+    "cfg_edge_count":  13321,
     "call_edge_count":  2767,
     "external_calls":  [
 
                        ],
-    "ir_operation_count":  60304,
+    "ir_operation_count":  60307,
     "functions":  [
 
                   ],

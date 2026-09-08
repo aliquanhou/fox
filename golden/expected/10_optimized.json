@@ -3,19 +3,19 @@
     "source_file":  "10_optimized.rs",
     "compiler":  "rustc",
     "compiler_version":  "1.98.1",
-    "optimization":  "release (opt-level=0)",
+    "optimization":  "release",
     "architecture":  "x64",
-    "function_count":  527,
+    "function_count":  529,
     "function_names":  [
 
                        ],
-    "basic_block_count":  8314,
-    "cfg_edge_count":  13328,
+    "basic_block_count":  8317,
+    "cfg_edge_count":  13331,
     "call_edge_count":  2542,
     "external_calls":  [
 
                        ],
-    "ir_operation_count":  58517,
+    "ir_operation_count":  58520,
     "functions":  [
 
                   ],

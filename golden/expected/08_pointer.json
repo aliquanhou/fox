@@ -3,19 +3,19 @@
     "source_file":  "08_pointer.rs",
     "compiler":  "rustc",
     "compiler_version":  "1.98.1",
-    "optimization":  "release (opt-level=0)",
+    "optimization":  "release",
     "architecture":  "x64",
-    "function_count":  526,
+    "function_count":  528,
     "function_names":  [
 
                        ],
-    "basic_block_count":  8310,
-    "cfg_edge_count":  13322,
+    "basic_block_count":  8313,
+    "cfg_edge_count":  13325,
     "call_edge_count":  2536,
     "external_calls":  [
 
                        ],
-    "ir_operation_count":  58465,
+    "ir_operation_count":  58468,
     "functions":  [
 
                   ],

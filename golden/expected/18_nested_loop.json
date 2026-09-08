@@ -3,19 +3,19 @@
     "source_file":  "18_nested_loop.rs",
     "compiler":  "rustc",
     "compiler_version":  "1.98.1",
-    "optimization":  "release (opt-level=0)",
+    "optimization":  "release",
     "architecture":  "x64",
-    "function_count":  495,
+    "function_count":  497,
     "function_names":  [
 
                        ],
-    "basic_block_count":  8050,
-    "cfg_edge_count":  12923,
+    "basic_block_count":  8053,
+    "cfg_edge_count":  12926,
     "call_edge_count":  2416,
     "external_calls":  [
 
                        ],
-    "ir_operation_count":  56042,
+    "ir_operation_count":  56045,
     "functions":  [
 
                   ],

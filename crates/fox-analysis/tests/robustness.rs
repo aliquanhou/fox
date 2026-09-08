@@ -194,7 +194,7 @@ use fox_analysis::ssa::SSAConstructor;
 use fox_analysis::type_recovery::TypeRecovery;
 use fox_core::Address;
 use fox_ir::{IRBasicBlock, IRFunction, IRInstruction, IROp, IROperand, OperandAccess};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 fn make_empty_ir_func() -> IRFunction {
     IRFunction {
         name: "empty".into(),

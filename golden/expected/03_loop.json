@@ -3,19 +3,19 @@
     "source_file":  "03_loop.rs",
     "compiler":  "rustc",
     "compiler_version":  "1.98.1",
-    "optimization":  "release (opt-level=0)",
+    "optimization":  "release",
     "architecture":  "x64",
-    "function_count":  528,
+    "function_count":  530,
     "function_names":  [
 
                        ],
-    "basic_block_count":  8312,
-    "cfg_edge_count":  13325,
+    "basic_block_count":  8315,
+    "cfg_edge_count":  13328,
     "call_edge_count":  2538,
     "external_calls":  [
 
                        ],
-    "ir_operation_count":  58496,
+    "ir_operation_count":  58499,
     "functions":  [
 
                   ],

@@ -1,4 +1,4 @@
-//! FOX Analysis Framework
+﻿//! FOX Analysis Framework
 //!
 //! P0-1 capabilities:
 //! - Function Discovery (recursive descent + Negative Evidence + Confidence tiers)
@@ -14,6 +14,7 @@ pub mod cfg;
 pub mod dataflow;
 pub mod dominators;
 pub mod golden;
+pub mod jump_table;
 pub mod ssa;
 pub mod symbol;
 pub mod type_recovery;
@@ -229,6 +230,11 @@ impl FunctionDiscovery {
         // Catches tiny leaf functions that have no pdata and no CALL references.
         Self::discover_orphan_leaf_functions(binary, disasm.as_ref(), &mut functions);
 
+        // Phase 4.3: Thunk following (MSVC O2 jump islands)
+        // If a discovered function is just an unconditional JMP, follow it
+        // to find the real function body.
+        Self::follow_thunks(binary, disasm.as_ref(), &mut functions);
+
         // Phase 4.5: Validate function bodies (P0-3.1)
         Self::validate_function_bodies(binary, disasm.as_ref(), &mut functions);
 
@@ -295,7 +301,7 @@ impl FunctionDiscovery {
     /// including leaf functions and optimized functions. This is authoritative
     /// metadata used by Windows exception handling, not a heuristic.
     ///
-    /// Evidence weight: 0.85 (high — authoritative metadata, but pdata can include
+    /// Evidence weight: 0.85 (high 鈥?authoritative metadata, but pdata can include
     /// data labels in rare cases, so not 1.0).
     fn discover_from_pdata(binary: &Binary, functions: &mut BTreeMap<u64, WithEvidence<Function>>) {
         if binary.architecture != fox_arch::Architecture::X64 {
@@ -308,7 +314,7 @@ impl FunctionDiscovery {
             }
 
             if let Some(entry) = functions.get_mut(&rf.begin_va) {
-                // Already discovered — add pdata as corroborating evidence
+                // Already discovered 鈥?add pdata as corroborating evidence
                 entry.evidence.push(
                     Evidence::new(EvidenceKind::PdataEntry)
                         .with_address(rf.begin_va)
@@ -400,7 +406,7 @@ impl FunctionDiscovery {
                     continue;
                 }
 
-                // MSVC x64: sub rsp, imm8 (48 83 EC NN) — common function entry
+                // MSVC x64: sub rsp, imm8 (48 83 EC NN) 鈥?common function entry
                 // Require preceding padding to avoid matching in-function stack adjustments.
                 if binary.architecture == fox_arch::Architecture::X64
                     && preceded_by_padding
@@ -442,7 +448,7 @@ impl FunctionDiscovery {
                 }
 
                 // MSVC x64: mov [rsp+disp8], r32 (89 [40-7F] 24 NN)
-                // Parameter home space store — common leaf function entry.
+                // Parameter home space store 鈥?common leaf function entry.
                 // Require preceding int3 (0xCC) padding or section start to avoid body matches.
                 if binary.architecture == fox_arch::Architecture::X64
                     && preceded_by_padding
@@ -493,7 +499,7 @@ impl FunctionDiscovery {
     /// contain a RET within the first few instructions. These are tiny leaf
     /// functions that have no .pdata entry and no CALL references.
     ///
-    /// Evidence weight: 0.25 (weak — padding+RET can match data, validation filters FPs)
+    /// Evidence weight: 0.25 (weak 鈥?padding+RET can match data, validation filters FPs)
     fn discover_orphan_leaf_functions(
         binary: &Binary,
         disasm: &dyn fox_disasm::Disassembler,
@@ -540,6 +546,89 @@ impl FunctionDiscovery {
                                     .with_weight(0.25),
                             ),
                         );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Follow thunk chains: if a discovered function starts with an
+    /// unconditional JMP, resolve the target and add it as a function candidate.
+    ///
+    /// MSVC O2 generates "jump islands" (thunks) where CALL targets are
+    /// JMP instructions to the real function body. Without thunk following,
+    /// the real functions are never discovered.
+    ///
+    /// Evidence weight: 0.6 (medium 鈥?derived from CALL target + JMP resolution)
+    fn follow_thunks(
+        binary: &Binary,
+        disasm: &dyn fox_disasm::Disassembler,
+        functions: &mut BTreeMap<u64, WithEvidence<Function>>,
+    ) {
+        let mut to_follow: Vec<u64> = functions.keys().copied().collect();
+        let mut visited = std::collections::HashSet::new();
+
+        while let Some(addr) = to_follow.pop() {
+            if !visited.insert(addr) {
+                continue;
+            }
+
+            // Disassemble first instruction at this address
+            let section = match binary
+                .sections
+                .iter()
+                .find(|s| s.contains_address(addr - binary.image_base))
+            {
+                Some(s) => s,
+                None => continue,
+            };
+            let off =
+                (addr - binary.image_base - section.virtual_address) as usize + section.raw_offset;
+            if off + 16 > binary.raw_data.len() {
+                continue;
+            }
+            let data = &binary.raw_data[off..off + 16.min(binary.raw_data.len() - off)];
+
+            let insts = match disasm.disassemble(data, addr) {
+                Ok(i) => i,
+                Err(_) => continue,
+            };
+
+            if let Some(first) = insts.first() {
+                // Check if this is an unconditional JMP (thunk)
+                if first.is_jump && !first.is_conditional_jump {
+                    if let Some(target) = first.jump_target {
+                        if Self::is_in_executable_section(binary, target)
+                            && !functions.contains_key(&target)
+                        {
+                            // Add the real function as a candidate
+                            functions.insert(
+                                target,
+                                WithEvidence::new(Function::new(
+                                    format!("sub_{:016X}", target),
+                                    Address(target),
+                                ))
+                                .with_evidence(
+                                    Evidence::new(EvidenceKind::ThunkTarget)
+                                        .with_address(target)
+                                        .with_detail(format!(
+                                            "Reached via thunk JMP @ 0x{:X}",
+                                            addr
+                                        ))
+                                        .with_weight(0.6),
+                                ),
+                            );
+                            to_follow.push(target);
+                        } else if let Some(entry) = functions.get_mut(&target) {
+                            // Already discovered 鈥?add thunk evidence
+                            entry.evidence.push(
+                                Evidence::new(EvidenceKind::ThunkTarget)
+                                    .with_address(target)
+                                    .with_detail(format!("Reached via thunk JMP @ 0x{:X}", addr))
+                                    .with_weight(0.3),
+                            );
+                            entry.confidence = entry.evidence.confidence();
+                        }
                     }
                 }
             }

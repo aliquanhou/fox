@@ -3,19 +3,19 @@
     "source_file":  "01_linear.rs",
     "compiler":  "rustc",
     "compiler_version":  "1.98.1",
-    "optimization":  "release (opt-level=0)",
+    "optimization":  "release",
     "architecture":  "x64",
-    "function_count":  521,
+    "function_count":  523,
     "function_names":  [
 
                        ],
-    "basic_block_count":  8297,
-    "cfg_edge_count":  13306,
+    "basic_block_count":  8300,
+    "cfg_edge_count":  13309,
     "call_edge_count":  2531,
     "external_calls":  [
 
                        ],
-    "ir_operation_count":  58391,
+    "ir_operation_count":  58394,
     "functions":  [
 
                   ],
