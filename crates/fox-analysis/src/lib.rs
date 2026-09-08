@@ -1,4 +1,4 @@
-﻿//! FOX Analysis Framework
+//! FOX Analysis Framework
 //!
 //! P0-1 capabilities:
 //! - Function Discovery (recursive descent + Negative Evidence + Confidence tiers)
@@ -584,8 +584,8 @@ impl FunctionDiscovery {
                 Some(s) => s,
                 None => continue,
             };
-            let off = (addr - binary.image_base - section.virtual_address) as usize
-                + section.raw_offset;
+            let off =
+                (addr - binary.image_base - section.virtual_address) as usize + section.raw_offset;
             let end = (off + 512).min(binary.raw_data.len());
             if off >= end {
                 continue;
@@ -595,9 +595,7 @@ impl FunctionDiscovery {
                 for inst in &insts {
                     if inst.is_jump && !inst.is_conditional_jump {
                         if let Some(target) = inst.jump_target {
-                            if Self::is_in_executable_section(binary, target)
-                                && target != addr
-                            {
+                            if Self::is_in_executable_section(binary, target) && target != addr {
                                 to_follow.push(target);
                             }
                         }
@@ -689,8 +687,7 @@ impl FunctionDiscovery {
         let mut taken_counts: BTreeMap<u64, usize> = BTreeMap::new();
 
         for section in binary.executable_sections() {
-            let data = &binary.raw_data
-                [section.raw_offset..section.raw_offset + section.raw_size];
+            let data = &binary.raw_data[section.raw_offset..section.raw_offset + section.raw_size];
             let base_addr = binary.image_base + section.virtual_address;
 
             if let Ok(instructions) = disasm.disassemble(data, base_addr) {
@@ -722,14 +719,19 @@ impl FunctionDiscovery {
             if section.raw_size == 0 {
                 continue;
             }
-            let data = &binary.raw_data
-                [section.raw_offset..section.raw_offset + section.raw_size];
+            let data = &binary.raw_data[section.raw_offset..section.raw_offset + section.raw_size];
             // Scan for 8-byte pointers that point into executable sections
             let mut i = 0;
             while i + 8 <= data.len() {
                 let ptr = u64::from_le_bytes([
-                    data[i], data[i+1], data[i+2], data[i+3],
-                    data[i+4], data[i+5], data[i+6], data[i+7],
+                    data[i],
+                    data[i + 1],
+                    data[i + 2],
+                    data[i + 3],
+                    data[i + 4],
+                    data[i + 5],
+                    data[i + 6],
+                    data[i + 7],
                 ]);
                 if ptr >= binary.image_base && Self::is_in_executable_section(binary, ptr) {
                     *taken_counts.entry(ptr).or_insert(0) += 1;
@@ -754,16 +756,13 @@ impl FunctionDiscovery {
             } else {
                 functions.insert(
                     *addr,
-                    WithEvidence::new(Function::new(
-                        format!("sub_{:016X}", addr),
-                        Address(*addr),
-                    ))
-                    .with_evidence(
-                        Evidence::new(EvidenceKind::AddressTaken)
-                            .with_address(*addr)
-                            .with_detail(&detail)
-                            .with_weight(if *count >= 2 { 0.55 } else { 0.4 }),
-                    ),
+                    WithEvidence::new(Function::new(format!("sub_{:016X}", addr), Address(*addr)))
+                        .with_evidence(
+                            Evidence::new(EvidenceKind::AddressTaken)
+                                .with_address(*addr)
+                                .with_detail(&detail)
+                                .with_weight(if *count >= 2 { 0.55 } else { 0.4 }),
+                        ),
                 );
             }
         }
@@ -1144,7 +1143,7 @@ fn build_identity_table(
     functions: &[WithEvidence<Function>],
     call_graph: &callgraph::CallGraph,
 ) -> fox_core::identity::FunctionIdentityTable {
-    use fox_core::identity::{IdentityKind, FunctionIdentityTable};
+    use fox_core::identity::{FunctionIdentityTable, IdentityKind};
     let mut table = FunctionIdentityTable::new();
 
     // First pass: classify each function
@@ -1152,9 +1151,11 @@ fn build_identity_table(
         let addr = func.value.address.0;
 
         // Check evidence for address-taken
-        let has_address_taken = func.evidence.items.iter().any(|e| {
-            matches!(e.kind, fox_core::EvidenceKind::AddressTaken)
-        });
+        let has_address_taken = func
+            .evidence
+            .items
+            .iter()
+            .any(|e| matches!(e.kind, fox_core::EvidenceKind::AddressTaken));
 
         // Check if first instruction is JMP (thunk)
         let mut is_thunk = false;
@@ -1164,8 +1165,8 @@ fn build_identity_table(
             .iter()
             .find(|s| s.contains_address(addr - binary.image_base))
         {
-            let off = (addr - binary.image_base - section.virtual_address) as usize
-                + section.raw_offset;
+            let off =
+                (addr - binary.image_base - section.virtual_address) as usize + section.raw_offset;
             if off + 16 <= binary.raw_data.len() {
                 let data = &binary.raw_data[off..off + 16];
                 if let Ok(disasm) = crate::create_disassembler(binary.architecture) {

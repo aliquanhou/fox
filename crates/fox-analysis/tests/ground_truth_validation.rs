@@ -4,8 +4,14 @@
 //! Compares FOX Function Discovery against known function boundaries.
 //!
 //! Metrics: TP / FP / FN / Boundary Start Error / Boundary End Error
+//!
+//! P0-3.4R: Metrics are clearly labeled:
+//! - GT-region Precision: TP / (TP + FP) where FP only counts addresses
+//!   within the GT function address range (excludes CRT/runtime outside GT)
+//! - Binary-wide Precision: N/A (requires complete binary-wide Ground Truth)
+//! - Outputs machine-readable JSON to tests/ground_truth/results/
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -63,6 +69,100 @@ struct BoundaryResult {
     boundary_end_errors: usize,
     total_expected: usize,
     total_actual: usize,
+    gt_min: u64,
+    gt_max: u64,
+}
+
+/// Machine-readable per-sample metrics (P0-3.4R)
+#[derive(Debug, Serialize)]
+struct SampleMetrics {
+    sample: String,
+    tp: usize,
+    fp: usize,
+    fn_: usize,
+    tn: usize,
+    boundary_start_errors: usize,
+    boundary_end_errors: usize,
+    identity_errors: usize,
+    expected_functions: usize,
+    actual_functions_total: usize,
+    gt_region_start: String,
+    gt_region_end: String,
+    gt_region_precision: f64,
+    gt_region_recall: f64,
+    gt_region_f1: f64,
+    binary_wide_precision: String, // "N/A" without complete binary GT
+    binary_wide_recall: String,    // "N/A"
+}
+
+/// Machine-readable aggregate metrics (P0-3.4R)
+#[derive(Debug, Serialize)]
+struct AggregateMetrics {
+    total_samples: usize,
+    total_tp: usize,
+    total_fp: usize,
+    total_fn: usize,
+    total_expected: usize,
+    gt_region_precision: f64,
+    gt_region_recall: f64,
+    gt_region_f1: f64,
+    binary_wide_precision: String,
+    binary_wide_recall: String,
+    metric_definitions: MetricDefinitions,
+    samples: Vec<SampleMetrics>,
+}
+
+#[derive(Debug, Serialize)]
+struct MetricDefinitions {
+    gt_region_precision: String,
+    gt_region_recall: String,
+    binary_wide_precision: String,
+    fp_definition: String,
+    tn_definition: String,
+}
+
+fn compute_metrics(sample: &str, r: &BoundaryResult) -> SampleMetrics {
+    let precision = if r.tp + r.fp > 0 {
+        r.tp as f64 / (r.tp + r.fp) as f64
+    } else {
+        0.0
+    };
+    let recall = if r.tp + r.fn_ > 0 {
+        r.tp as f64 / (r.tp + r.fn_) as f64
+    } else {
+        0.0
+    };
+    let f1 = if precision + recall > 0.0 {
+        2.0 * precision * recall / (precision + recall)
+    } else {
+        0.0
+    };
+    // TN: addresses in GT region that are correctly NOT identified as functions.
+    // Approximated as (GT region size in bytes / typical function size) - (TP + FP).
+    // This is a rough estimate; exact TN requires instruction-level analysis.
+    let region_bytes = r.gt_max.saturating_sub(r.gt_min) as usize;
+    let estimated_slots = region_bytes / 32; // assume avg 32 bytes per function slot
+    let tn = estimated_slots.saturating_sub(r.tp + r.fp);
+
+    SampleMetrics {
+        sample: sample.to_string(),
+        tp: r.tp,
+        fp: r.fp,
+        fn_: r.fn_,
+        tn,
+        boundary_start_errors: r.boundary_start_errors,
+        boundary_end_errors: r.boundary_end_errors,
+        identity_errors: 0, // tracked separately in identity tests
+        expected_functions: r.total_expected,
+        actual_functions_total: r.total_actual,
+        gt_region_start: format!("0x{:X}", r.gt_min),
+        gt_region_end: format!("0x{:X}", r.gt_max),
+        gt_region_precision: precision,
+        gt_region_recall: recall,
+        gt_region_f1: f1,
+        binary_wide_precision: "N/A".to_string(),
+        binary_wide_recall: "N/A".to_string(),
+    }
 }
 
 fn compare_boundaries(sample: &str) -> BoundaryResult {
@@ -161,26 +261,19 @@ fn compare_boundaries(sample: &str) -> BoundaryResult {
         boundary_end_errors,
         total_expected: fixture.expected_function_count,
         total_actual: fox_addrs.len(),
+        gt_min,
+        gt_max,
     }
 }
 
 fn run_sample(sample: &str) {
     let r = compare_boundaries(sample);
-    let precision = if r.tp + r.fp > 0 {
-        r.tp as f64 / (r.tp + r.fp) as f64
-    } else {
-        0.0
-    };
-    let recall = if r.tp + r.fn_ > 0 {
-        r.tp as f64 / (r.tp + r.fn_) as f64
-    } else {
-        0.0
-    };
+    let m = compute_metrics(sample, &r);
 
     eprintln!(
-        "[GT] {}: TP={} FP={} FN={} StartErr={} EndErr={} | expected={} actual={} | precision={:.2} recall={:.2}",
+        "[GT] {}: TP={} FP={} FN={} StartErr={} EndErr={} | expected={} actual={} | GT-region precision={:.2} recall={:.2}",
         sample, r.tp, r.fp, r.fn_, r.boundary_start_errors, r.boundary_end_errors,
-        r.total_expected, r.total_actual, precision, recall
+        r.total_expected, r.total_actual, m.gt_region_precision, m.gt_region_recall
     );
 
     // P0-3.1: Report metrics, do not assert. Ground Truth measures real accuracy.
@@ -199,6 +292,7 @@ fn ground_truth_all_samples() {
     let mut total_fp = 0;
     let mut total_fn = 0;
     let mut total_expected = 0;
+    let mut sample_metrics = Vec::new();
 
     for sample in &samples {
         let r = compare_boundaries(sample);
@@ -206,6 +300,7 @@ fn ground_truth_all_samples() {
         total_fp += r.fp;
         total_fn += r.fn_;
         total_expected += r.total_expected;
+        let m = compute_metrics(sample, &r);
         eprintln!(
             "  {}: TP={} FP={} FN={} StartErr={} EndErr={} (expected={})",
             sample,
@@ -216,6 +311,7 @@ fn ground_truth_all_samples() {
             r.boundary_end_errors,
             r.total_expected
         );
+        sample_metrics.push(m);
     }
 
     let precision = if total_tp + total_fp > 0 {
@@ -228,8 +324,13 @@ fn ground_truth_all_samples() {
     } else {
         0.0
     };
+    let f1 = if precision + recall > 0.0 {
+        2.0 * precision * recall / (precision + recall)
+    } else {
+        0.0
+    };
 
-    eprintln!("\n=== Ground Truth Summary ===");
+    eprintln!("\n=== Ground Truth Summary (P0-3.4R Metrics) ===");
     eprintln!(
         "Samples: {} | Expected functions: {} | TP: {} | FP: {} | FN: {}",
         samples.len(),
@@ -238,11 +339,59 @@ fn ground_truth_all_samples() {
         total_fp,
         total_fn
     );
-    eprintln!("Precision: {:.4} | Recall: {:.4}", precision, recall);
+    eprintln!(
+        "GT-region Precision: {:.4} | GT-region Recall: {:.4} | GT-region F1: {:.4}",
+        precision, recall, f1
+    );
+    eprintln!("Binary-wide Precision: N/A (requires complete binary-wide Ground Truth)");
+    eprintln!("Binary-wide Recall: N/A");
+    eprintln!(
+        "NOTE: FP only counts addresses within GT function region [gt_min, gt_max]. \
+         CRT/runtime functions outside GT region are excluded from FP."
+    );
+
+    // Write machine-readable JSON
+    let aggregate = AggregateMetrics {
+        total_samples: samples.len(),
+        total_tp,
+        total_fp,
+        total_fn,
+        total_expected,
+        gt_region_precision: precision,
+        gt_region_recall: recall,
+        gt_region_f1: f1,
+        binary_wide_precision: "N/A".to_string(),
+        binary_wide_recall: "N/A".to_string(),
+        metric_definitions: MetricDefinitions {
+            gt_region_precision: "TP / (TP + FP), where FP only counts FOX-discovered \
+                addresses within the GT function region [gt_min, gt_max] that are not \
+                in Ground Truth. Excludes CRT/runtime outside GT region."
+                .to_string(),
+            gt_region_recall: "TP / (TP + FN), where FN = GT functions not found by FOX."
+                .to_string(),
+            binary_wide_precision: "N/A without complete binary-wide Ground Truth covering \
+                all functions (application + CRT + runtime + compiler-generated)."
+                .to_string(),
+            fp_definition: "FOX-discovered function address within GT region that is not \
+                in Ground Truth."
+                .to_string(),
+            tn_definition: "Estimated: (GT region bytes / 32) - (TP + FP). Approximate \
+                count of non-function addresses correctly not identified as functions."
+                .to_string(),
+        },
+        samples: sample_metrics,
+    };
+
+    let results_dir = ground_truth_dir().join("results");
+    std::fs::create_dir_all(&results_dir).ok();
+    let json_path = results_dir.join("ground_truth_metrics.json");
+    if let Ok(json) = serde_json::to_string_pretty(&aggregate) {
+        std::fs::write(&json_path, &json).ok();
+        eprintln!("Machine-readable metrics written to: {:?}", json_path);
+    }
 
     // P0-3.1: Report real metrics, do not assert 100%.
     // Ground Truth exists to measure FOX accurately, not to force a pass.
-    // Future phases will raise the bar as implementation improves.
     eprintln!(
         "NOTE: This is a measurement test. FN={} indicates real discovery gaps.",
         total_fn

@@ -10,7 +10,9 @@
 
 use crate::Function;
 use fox_binary::Binary;
-use fox_core::{Address, CallEdgeKind, CallGraphEdge, Evidence, EvidenceKind, IndirectCallKind, WithEvidence};
+use fox_core::{
+    Address, CallEdgeKind, CallGraphEdge, Evidence, EvidenceKind, IndirectCallKind, WithEvidence,
+};
 use serde::{Deserialize, Serialize};
 
 /// A node in the call graph.

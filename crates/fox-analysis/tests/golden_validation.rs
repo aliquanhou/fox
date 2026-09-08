@@ -139,8 +139,10 @@ fn run_golden_test(name: &str) {
         updated.ir_operation_count = actual.ir_operation_count;
         let json = serde_json::to_string_pretty(&updated).unwrap();
         std::fs::write(&expected_path, json).unwrap();
-        eprintln!("[UPDATED] {}: functions={}, blocks={}, edges={}",
-            name, actual.function_count, actual.basic_block_count, actual.cfg_edge_count);
+        eprintln!(
+            "[UPDATED] {}: functions={}, blocks={}, edges={}",
+            name, actual.function_count, actual.basic_block_count, actual.cfg_edge_count
+        );
         return;
     }
 

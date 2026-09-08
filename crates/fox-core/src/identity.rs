@@ -126,7 +126,11 @@ pub enum IdentityRelation {
     /// `from` is a thunk that redirects to `to`.
     ThunkRedirect { from: u64, to: u64 },
     /// `from` and `to` are source functions folded into the same binary body.
-    IcfFold { from: String, to: String, binary_address: u64 },
+    IcfFold {
+        from: String,
+        to: String,
+        binary_address: u64,
+    },
     /// `from` is an alias for `to` (export forwarding, etc.).
     Alias { from: u64, to: u64 },
 }
@@ -194,20 +198,28 @@ impl FunctionIdentityTable {
         }
 
         // Update source identity
-        let folded_with = self.binary_identities
+        let folded_with = self
+            .binary_identities
             .get(&binary_address)
-            .map(|b| b.source_symbols.iter().filter(|s| *s != name).cloned().collect())
+            .map(|b| {
+                b.source_symbols
+                    .iter()
+                    .filter(|s| *s != name)
+                    .cloned()
+                    .collect()
+            })
             .unwrap_or_default();
 
-        let src = self.source_identities.entry(name.to_string()).or_insert_with(|| {
-            SourceFunctionIdentity {
+        let src = self
+            .source_identities
+            .entry(name.to_string())
+            .or_insert_with(|| SourceFunctionIdentity {
                 name: name.to_string(),
                 binary_address: None,
                 inlined: false,
                 removed: false,
                 folded_with: Vec::new(),
-            }
-        });
+            });
         src.binary_address = Some(binary_address);
         src.folded_with = folded_with;
 
