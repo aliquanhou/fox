@@ -279,7 +279,11 @@ fn run_sample(sample: &str) {
     // P0-3.1: Report metrics, do not assert. Ground Truth measures real accuracy.
 }
 
-#[test]
+// P0-4.1: Disabled - this test calls analyze_binary() 20x sequentially,
+// causing CI to take 30+ minutes. The 10 individual tests already cover
+// all samples (both O0 and O2) and run in parallel (~2 min total).
+// #[test]
+#[allow(dead_code)]
 fn ground_truth_all_samples() {
     let samples = list_ground_truth_samples();
     assert!(!samples.is_empty(), "No ground truth samples found");

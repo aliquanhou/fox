@@ -60,5 +60,8 @@ jobs:
     - name: P0-3.4R Negative tests
       run: cargo test -p fox-analysis --test p0_3_4r_negative_tests
 
-    - name: Full test suite
-      run: cargo test --workspace
+    - name: P0-4.1 Pipeline tests
+      run: cargo test -p fox-analysis --test p0_4_1_pipeline_tests
+
+    - name: Full test suite (excluding slow ground truth, already run above)
+      run: cargo test --workspace --skip ground_truth_validation
