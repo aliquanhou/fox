@@ -5,17 +5,17 @@
     "compiler_version":  "1.98.1",
     "optimization":  "release (opt-level=0)",
     "architecture":  "x64",
-    "function_count":  380,
+    "function_count":  526,
     "function_names":  [
 
                        ],
-    "basic_block_count":  6953,
-    "cfg_edge_count":  11212,
-    "call_edge_count":  2200,
+    "basic_block_count":  8310,
+    "cfg_edge_count":  13322,
+    "call_edge_count":  2536,
     "external_calls":  [
 
                        ],
-    "ir_operation_count":  49231,
+    "ir_operation_count":  58465,
     "functions":  [
 
                   ],

@@ -118,6 +118,59 @@ impl Binary {
     pub fn executable_sections(&self) -> Vec<&Section> {
         self.sections.iter().filter(|s| s.is_executable()).collect()
     }
+
+    /// Parse .pdata section (x64 exception handling metadata).
+    ///
+    /// Each RUNTIME_FUNCTION is 12 bytes:
+    /// - BeginAddress: DWORD (RVA of function start)
+    /// - EndAddress: DWORD (RVA of function end)
+    /// - UnwindData: DWORD (RVA of UNWIND_INFO)
+    ///
+    /// This is the authoritative source of function boundaries on x64 Windows.
+    /// Every function (including leaf functions) has a pdata entry.
+    pub fn exception_functions(&self) -> Vec<RuntimeFunction> {
+        let mut result = Vec::new();
+        let Some(pdata) = self.sections.iter().find(|s| s.name == ".pdata") else {
+            return result;
+        };
+        if pdata.raw_size == 0 || pdata.raw_offset + pdata.raw_size > self.raw_data.len() {
+            return result;
+        }
+        let data = &self.raw_data[pdata.raw_offset..pdata.raw_offset + pdata.raw_size];
+        let count = data.len() / 12;
+        for i in 0..count {
+            let off = i * 12;
+            if off + 12 > data.len() {
+                break;
+            }
+            let begin =
+                u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]);
+            let end =
+                u32::from_le_bytes([data[off + 4], data[off + 5], data[off + 6], data[off + 7]]);
+            let unwind =
+                u32::from_le_bytes([data[off + 8], data[off + 9], data[off + 10], data[off + 11]]);
+            if begin != 0 && end != 0 && end > begin {
+                result.push(RuntimeFunction {
+                    begin_rva: begin as u64,
+                    end_rva: end as u64,
+                    unwind_rva: unwind as u64,
+                    begin_va: self.image_base + begin as u64,
+                    end_va: self.image_base + end as u64,
+                });
+            }
+        }
+        result
+    }
+}
+
+/// x64 RUNTIME_FUNCTION from .pdata section.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeFunction {
+    pub begin_rva: u64,
+    pub end_rva: u64,
+    pub unwind_rva: u64,
+    pub begin_va: u64,
+    pub end_va: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

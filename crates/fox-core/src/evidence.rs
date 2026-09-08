@@ -134,6 +134,8 @@ pub enum EvidenceKind {
     InvalidFunctionBody { reason: String },
     /// Tail call detected (JMP to another function)
     TailCall,
+    /// Function found in .pdata exception metadata (x64 authoritative)
+    PdataEntry,
 }
 
 impl fmt::Display for EvidenceKind {
@@ -203,6 +205,7 @@ impl fmt::Display for EvidenceKind {
                 write!(f, "Invalid function body: {}", reason)
             }
             EvidenceKind::TailCall => write!(f, "Tail call detected"),
+            EvidenceKind::PdataEntry => write!(f, "Function in .pdata exception metadata"),
         }
     }
 }

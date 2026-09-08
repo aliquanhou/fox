@@ -1,0 +1,99 @@
+﻿cargo : warning: field `name` is never read
+所在位置 行:1 字符: 122
++ ... hat-1\fox"; cargo test -p fox-analysis --test ground_truth_validation ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (warning: field `name` is never read:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  --> crates\fox-analysis\tests\ground_truth_validation.rs:14:5
+   |
+13 | struct GroundTruthFunction {
+   |        ------------------- field in this struct
+14 |     name: String,
+   |     ^^^^
+   |
+   = note: `GroundTruthFunction` has a derived impl for the trait `Debug`, but this is intentionally ignored during dea
+d code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `sample_name` is never read
+  --> crates\fox-analysis\tests\ground_truth_validation.rs:21:5
+   |
+20 | struct GroundTruthFixture {
+   |        ------------------ field in this struct
+21 |     sample_name: String,
+   |     ^^^^^^^^^^^
+   |
+   = note: `GroundTruthFixture` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead
+ code analysis
+
+warning: linker stdout: LINK : warning LNK4098: 默认库“MSVCRTD”与其他库的使用冲突；请使用 /NODEFAULTLIB:library
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `fox-analysis` (test "ground_truth_validation") generated 3 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running tests\ground_truth_validation.rs (target\debug\deps\ground_truth_validation-90cc93bdf8671fde.exe)
+
+running 11 tests
+[GT] 03_nested_branch_O0: TP=1 FP=3 FN=1 StartErr=0 EndErr=0 | expected=2 actual=4029 | precision=0.25 recall=0.50
+[GT] 01_linear_O0: TP=2 FP=3 FN=0 StartErr=0 EndErr=1 | expected=2 actual=4034 | precision=0.40 recall=1.00
+[GT] 02_if_else_O0: TP=2 FP=3 FN=0 StartErr=0 EndErr=1 | expected=2 actual=4036 | precision=0.40 recall=1.00
+[GT] 04_loop_O0: TP=2 FP=3 FN=0 StartErr=0 EndErr=1 | expected=2 actual=4029 | precision=0.40 recall=1.00
+[GT] 03_nested_branch_O2: TP=1 FP=4 FN=1 StartErr=0 EndErr=1 | expected=2 actual=4034 | precision=0.20 recall=0.50
+test ground_truth_03_nested_branch ... ok
+[GT] 02_if_else_O2: TP=2 FP=4 FN=0 StartErr=0 EndErr=1 | expected=2 actual=4033 | precision=0.33 recall=1.00
+test ground_truth_02_if_else ... ok
+[GT] 04_loop_O2: TP=1 FP=4 FN=1 StartErr=0 EndErr=1 | expected=2 actual=4034 | precision=0.20 recall=0.50
+test ground_truth_04_loop ... ok
+[GT] 01_linear_O2: TP=2 FP=4 FN=0 StartErr=0 EndErr=1 | expected=2 actual=4034 | precision=0.33 recall=1.00
+test ground_truth_01_linear ... ok
+[GT] 05_nested_loop_O0: TP=2 FP=2 FN=0 StartErr=0 EndErr=1 | expected=2 actual=4034 | precision=0.50 recall=1.00
+[GT] 06_direct_call_O0: TP=3 FP=3 FN=0 StartErr=0 EndErr=2 | expected=3 actual=4036 | precision=0.50 recall=1.00
+[GT] 07_recursion_O0: TP=3 FP=3 FN=0 StartErr=0 EndErr=2 | expected=3 actual=4031 | precision=0.50 recall=1.00
+[GT] 08_switch_O0: TP=2 FP=1 FN=0 StartErr=0 EndErr=1 | expected=2 actual=4032 | precision=0.67 recall=1.00
+[GT] 05_nested_loop_O2: TP=2 FP=8 FN=0 StartErr=0 EndErr=1 | expected=2 actual=4037 | precision=0.20 recall=1.00
+test ground_truth_05_nested_loop ... ok
+[GT] 06_direct_call_O2: TP=3 FP=5 FN=0 StartErr=0 EndErr=2 | expected=3 actual=4039 | precision=0.38 recall=1.00
+test ground_truth_06_direct_call ... ok
+[GT] 08_switch_O2: TP=0 FP=5 FN=2 StartErr=0 EndErr=0 | expected=2 actual=4030 | precision=0.00 recall=0.00
+test ground_truth_08_switch ... ok
+Running Ground Truth Differential on 20 samples...
+[GT] 07_recursion_O2: TP=2 FP=6 FN=1 StartErr=0 EndErr=2 | expected=3 actual=4035 | precision=0.25 recall=0.67
+test ground_truth_07_recursion ... ok
+[GT] 09_function_pointer_O0: TP=5 FP=2 FN=0 StartErr=0 EndErr=4 | expected=5 actual=4035 | precision=0.71 recall=1.00
+[GT] 10_optimized_O0: TP=2 FP=2 FN=1 StartErr=0 EndErr=2 | expected=3 actual=4035 | precision=0.50 recall=0.67
+  01_linear_O0: TP=2 FP=3 FN=0 StartErr=0 EndErr=1 (expected=2)
+[GT] 09_function_pointer_O2: TP=4 FP=4 FN=1 StartErr=0 EndErr=3 | expected=5 actual=4032 | precision=0.50 recall=0.80
+test ground_truth_09_function_pointer ... ok
+[GT] 10_optimized_O2: TP=2 FP=2 FN=1 StartErr=0 EndErr=1 | expected=3 actual=4033 | precision=0.50 recall=0.67
+test ground_truth_10_optimized ... ok
+  01_linear_O2: TP=2 FP=4 FN=0 StartErr=0 EndErr=1 (expected=2)
+  02_if_else_O0: TP=2 FP=3 FN=0 StartErr=0 EndErr=1 (expected=2)
+  02_if_else_O2: TP=2 FP=4 FN=0 StartErr=0 EndErr=1 (expected=2)
+  03_nested_branch_O0: TP=1 FP=3 FN=1 StartErr=0 EndErr=0 (expected=2)
+test ground_truth_all_samples has been running for over 60 seconds
+  03_nested_branch_O2: TP=1 FP=4 FN=1 StartErr=0 EndErr=1 (expected=2)
+  04_loop_O0: TP=2 FP=3 FN=0 StartErr=0 EndErr=1 (expected=2)
+  04_loop_O2: TP=1 FP=4 FN=1 StartErr=0 EndErr=1 (expected=2)
+  05_nested_loop_O0: TP=2 FP=2 FN=0 StartErr=0 EndErr=1 (expected=2)
+  05_nested_loop_O2: TP=2 FP=8 FN=0 StartErr=0 EndErr=1 (expected=2)
+  06_direct_call_O0: TP=3 FP=3 FN=0 StartErr=0 EndErr=2 (expected=3)
+  06_direct_call_O2: TP=3 FP=5 FN=0 StartErr=0 EndErr=2 (expected=3)
+  07_recursion_O0: TP=3 FP=3 FN=0 StartErr=0 EndErr=2 (expected=3)
+  07_recursion_O2: TP=2 FP=6 FN=1 StartErr=0 EndErr=2 (expected=3)
+  08_switch_O0: TP=2 FP=1 FN=0 StartErr=0 EndErr=1 (expected=2)
+  08_switch_O2: TP=0 FP=5 FN=2 StartErr=0 EndErr=0 (expected=2)
+  09_function_pointer_O0: TP=5 FP=2 FN=0 StartErr=0 EndErr=4 (expected=5)
+  09_function_pointer_O2: TP=4 FP=4 FN=1 StartErr=0 EndErr=3 (expected=5)
+  10_optimized_O0: TP=2 FP=2 FN=1 StartErr=0 EndErr=2 (expected=3)
+  10_optimized_O2: TP=2 FP=2 FN=1 StartErr=0 EndErr=1 (expected=3)
+
+=== Ground Truth Summary ===
+Samples: 20 | Expected functions: 52 | TP: 43 | FP: 71 | FN: 9
+Precision: 0.3772 | Recall: 0.8269
+NOTE: This is a measurement test. FN=9 indicates real discovery gaps.
+test ground_truth_all_samples ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 295.44s
+

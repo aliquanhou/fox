@@ -191,6 +191,11 @@ impl FunctionDiscovery {
         // Phase 1: Seed from entry point and exports (high confidence)
         Self::seed_functions(binary, &mut functions);
 
+        // Phase 1.5: .pdata exception metadata (x64 authoritative function boundaries)
+        // This is the highest-confidence source for x64: every function has a
+        // RUNTIME_FUNCTION entry used by Windows exception handling.
+        Self::discover_from_pdata(binary, &mut functions);
+
         // Phase 2: Scan all executable sections for CALL targets
         Self::scan_call_targets(binary, disasm.as_ref(), &mut call_target_counts);
 
@@ -219,6 +224,10 @@ impl FunctionDiscovery {
 
         // Phase 4: Prologue pattern matching (supplementary, lower weight)
         Self::scan_prologues(binary, &mut functions);
+
+        // Phase 4.2: Orphan leaf function detection (int3 padding + RET)
+        // Catches tiny leaf functions that have no pdata and no CALL references.
+        Self::discover_orphan_leaf_functions(binary, disasm.as_ref(), &mut functions);
 
         // Phase 4.5: Validate function bodies (P0-3.1)
         Self::validate_function_bodies(binary, disasm.as_ref(), &mut functions);
@@ -277,6 +286,57 @@ impl FunctionDiscovery {
                     .with_weight(0.9),
             );
             entry.confidence = entry.evidence.confidence();
+        }
+    }
+
+    /// Discover functions from .pdata exception metadata (x64 only).
+    ///
+    /// .pdata contains RUNTIME_FUNCTION entries for EVERY function in the binary,
+    /// including leaf functions and optimized functions. This is authoritative
+    /// metadata used by Windows exception handling, not a heuristic.
+    ///
+    /// Evidence weight: 0.85 (high — authoritative metadata, but pdata can include
+    /// data labels in rare cases, so not 1.0).
+    fn discover_from_pdata(binary: &Binary, functions: &mut BTreeMap<u64, WithEvidence<Function>>) {
+        if binary.architecture != fox_arch::Architecture::X64 {
+            return; // .pdata is x64-specific
+        }
+
+        for rf in binary.exception_functions() {
+            if !Self::is_in_executable_section(binary, rf.begin_va) {
+                continue;
+            }
+
+            if let Some(entry) = functions.get_mut(&rf.begin_va) {
+                // Already discovered — add pdata as corroborating evidence
+                entry.evidence.push(
+                    Evidence::new(EvidenceKind::PdataEntry)
+                        .with_address(rf.begin_va)
+                        .with_detail(format!(".pdata: [0x{:X}, 0x{:X})", rf.begin_va, rf.end_va))
+                        .with_weight(0.4),
+                );
+                entry.confidence = entry.evidence.confidence();
+                // Update end_address from authoritative pdata
+                if entry.value.end_address.is_none() {
+                    entry.value.end_address = Some(Address(rf.end_va));
+                }
+            } else {
+                let mut func =
+                    Function::new(format!("sub_{:016X}", rf.begin_va), Address(rf.begin_va));
+                func.end_address = Some(Address(rf.end_va));
+                functions.insert(
+                    rf.begin_va,
+                    WithEvidence::new(func).with_evidence(
+                        Evidence::new(EvidenceKind::PdataEntry)
+                            .with_address(rf.begin_va)
+                            .with_detail(format!(
+                                ".pdata: [0x{:X}, 0x{:X})",
+                                rf.begin_va, rf.end_va
+                            ))
+                            .with_weight(0.85),
+                    ),
+                );
+            }
         }
     }
 
@@ -424,6 +484,63 @@ impl FunctionDiscovery {
                                 .with_weight(0.3),
                         )
                     });
+                }
+            }
+        }
+    }
+
+    /// Discover orphan leaf functions: addresses preceded by int3 padding that
+    /// contain a RET within the first few instructions. These are tiny leaf
+    /// functions that have no .pdata entry and no CALL references.
+    ///
+    /// Evidence weight: 0.25 (weak — padding+RET can match data, validation filters FPs)
+    fn discover_orphan_leaf_functions(
+        binary: &Binary,
+        disasm: &dyn fox_disasm::Disassembler,
+        functions: &mut BTreeMap<u64, WithEvidence<Function>>,
+    ) {
+        for section in binary.executable_sections() {
+            let data = &binary.raw_data[section.raw_offset..section.raw_offset + section.raw_size];
+            let base_addr = binary.image_base + section.virtual_address;
+
+            // Scan for int3 (0xCC) followed by a non-int3 byte that starts a valid function
+            for i in 1..data.len() {
+                if data[i - 1] != 0xCC {
+                    continue;
+                }
+                if data[i] == 0xCC || data[i] == 0x00 {
+                    continue; // still padding or data
+                }
+                let addr = base_addr + i as u64;
+                if functions.contains_key(&addr) {
+                    continue; // already discovered
+                }
+
+                // Try to disassemble up to 16 bytes and look for RET
+                let end = (i + 16).min(data.len());
+                if let Ok(insts) = disasm.disassemble(&data[i..end], addr) {
+                    let has_ret = insts
+                        .iter()
+                        .any(|inst| inst.mnemonic.eq_ignore_ascii_case("ret"));
+                    let has_call = insts
+                        .iter()
+                        .any(|inst| inst.mnemonic.eq_ignore_ascii_case("call"));
+                    // Must have RET and must NOT have CALL (leaf function heuristic)
+                    if has_ret && !has_call && !insts.is_empty() {
+                        functions.insert(
+                            addr,
+                            WithEvidence::new(Function::new(
+                                format!("sub_{:016X}", addr),
+                                Address(addr),
+                            ))
+                            .with_evidence(
+                                Evidence::new(EvidenceKind::FunctionPrologue)
+                                    .with_address(addr)
+                                    .with_detail("Orphan leaf: int3 padding + RET, no CALL")
+                                    .with_weight(0.25),
+                            ),
+                        );
+                    }
                 }
             }
         }
