@@ -147,7 +147,8 @@ fn test_pipeline_determinism() {
         "Pipeline must be deterministic: same skipped count"
     );
 
-    // For each function, SSA variable version count must match
+    // For each function with SSA, variable version count must match
+    // (thunk functions with <=2 instructions have ssa: None, skip them)
     for (addr, ctx1) in &result1.pipeline.function_analysis {
         let ctx2 = result2
             .pipeline
@@ -155,8 +156,14 @@ fn test_pipeline_determinism() {
             .get(addr)
             .expect("Same function must exist in both runs");
 
-        let ssa1 = ctx1.ssa.as_ref().unwrap();
-        let ssa2 = ctx2.ssa.as_ref().unwrap();
+        let (ssa1, ssa2) = match (&ctx1.ssa, &ctx2.ssa) {
+            (Some(s1), Some(s2)) => (s1, s2),
+            (None, None) => continue, // both thunks, deterministic
+            _ => panic!(
+                "SSA presence must be deterministic for function 0x{:X}",
+                addr
+            ),
+        };
 
         assert_eq!(
             ssa1.variable_versions.len(),
