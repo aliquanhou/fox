@@ -1,0 +1,25 @@
+{
+    "sample_name":  "08_pointer",
+    "source_file":  "08_pointer.rs",
+    "compiler":  "rustc",
+    "compiler_version":  "1.98.1",
+    "optimization":  "release (opt-level=0)",
+    "architecture":  "x64",
+    "function_count":  380,
+    "function_names":  [
+
+                       ],
+    "basic_block_count":  6953,
+    "cfg_edge_count":  11212,
+    "call_edge_count":  2200,
+    "external_calls":  [
+
+                       ],
+    "ir_operation_count":  49231,
+    "functions":  [
+
+                  ],
+    "match_modes":  {
+
+                    }
+}

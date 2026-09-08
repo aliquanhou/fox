@@ -1,0 +1,154 @@
+# FOX Golden Sample Corpus
+# P0-1: 10 minimal native samples with Ground Truth
+#
+# Each sample is compiled from Rust source (no C compiler available in env).
+# Source: samples/src/NN_name.rs
+# Binary: samples/target/release/NN_name.exe
+# Compiler: rustc (stable), opt-level=0 (except 10_optimized: opt-level=3)
+# Architecture: x86-64, PE32+
+
+samples:
+  - id: 01_linear
+    description: "Linear function with no branches"
+    source: samples/src/01_linear.rs
+    compiler: rustc
+    optimization: O0
+    architecture: x86-64
+    expected:
+      key_function: linear_add
+      properties:
+        - "No conditional branches in linear_add"
+        - "Single basic block (excluding prologue/epilogue split)"
+        - "No calls within linear_add"
+
+  - id: 02_branch
+    description: "Simple if/else conditional branch"
+    source: samples/src/02_branch.rs
+    compiler: rustc
+    optimization: O0
+    architecture: x86-64
+    expected:
+      key_function: branch_max
+      properties:
+        - "At least one conditional branch (Jcc)"
+        - "At least 3 basic blocks"
+        - "ConditionalTrue + ConditionalFalse edges"
+
+  - id: 03_loop
+    description: "Simple for loop"
+    source: samples/src/03_loop.rs
+    compiler: rustc
+    optimization: O0
+    architecture: x86-64
+    expected:
+      key_function: loop_sum
+      properties:
+        - "Loop back edge present"
+        - "At least 3 basic blocks"
+        - "Conditional branch controlling loop"
+
+  - id: 04_nested_branch
+    description: "Nested if/else"
+    source: samples/src/04_nested_branch.rs
+    compiler: rustc
+    optimization: O0
+    architecture: x86-64
+    expected:
+      key_function: nested_classify
+      properties:
+        - "Multiple nested conditional branches"
+        - "At least 5 basic blocks"
+        - "Multiple ConditionalTrue/False edges"
+
+  - id: 05_call
+    description: "Function with direct calls"
+    source: samples/src/05_call.rs
+    compiler: rustc
+    optimization: O0
+    architecture: x86-64
+    expected:
+      key_function: caller
+      properties:
+        - "At least 2 user functions (caller + helper)"
+        - "Direct call edges from caller to helper"
+        - "Call graph contains caller -> helper"
+
+  - id: 06_recursive
+    description: "Recursive function (factorial)"
+    source: samples/src/06_recursive.rs
+    compiler: rustc
+    optimization: O0
+    architecture: x86-64
+    expected:
+      key_function: factorial
+      properties:
+        - "Self-call (recursive call edge)"
+        - "Conditional branch for base case"
+        - "At least 3 basic blocks"
+
+  - id: 07_switch
+    description: "Switch statement / match"
+    source: samples/src/07_switch.rs
+    compiler: rustc
+    optimization: O0
+    architecture: x86-64
+    expected:
+      key_function: switch_dispatch
+      properties:
+        - "Multiple conditional branches or jump table"
+        - "At least 5 basic blocks"
+        - "Multiple exit paths"
+
+  - id: 08_pointer
+    description: "Pointer operations and memory access"
+    source: samples/src/08_pointer.rs
+    compiler: rustc
+    optimization: O0
+    architecture: x86-64
+    expected:
+      key_function: pointer_sum
+      properties:
+        - "Memory load operations (LOAD IR)"
+        - "Loop over array"
+        - "Pointer arithmetic"
+
+  - id: 09_function_pointer
+    description: "Indirect call via function pointer"
+    source: samples/src/09_function_pointer.rs
+    compiler: rustc
+    optimization: O0
+    architecture: x86-64
+    expected:
+      key_function: apply_op
+      properties:
+        - "Indirect call edge (CallEdgeKind::Indirect)"
+        - "At least 3 user functions"
+        - "Function pointer passed as argument"
+
+  - id: 10_optimized
+    description: "Same patterns with optimization enabled"
+    source: samples/src/10_optimized.rs
+    compiler: rustc
+    optimization: O3
+    architecture: x86-64
+    expected:
+      key_function: optimized_max
+      properties:
+        - "Optimized code may have fewer blocks"
+        - "Semantic structure preserved"
+        - "CMOV may replace branches"
+
+# Differential Validation Strategy
+# =================================
+# For each sample:
+#   Known Source -> Compiler -> Binary -> FOX -> Recovered Structure
+#
+# Compare:
+#   - Function count (user functions, not runtime)
+#   - Basic block count for key function
+#   - CFG edge types for key function
+#   - Call edges for key function
+#   - Instruction semantics (via IR L1)
+#
+# NOTE: Rust binaries include runtime functions (std, panic, etc.).
+# Analysis must filter by known function names/addresses for Ground Truth.

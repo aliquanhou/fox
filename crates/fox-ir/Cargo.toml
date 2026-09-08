@@ -1,0 +1,13 @@
+[package]
+name = "fox-ir"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "FOX Intermediate Representation"
+
+[dependencies]
+fox-core.workspace = true
+fox-arch.workspace = true
+fox-disasm.workspace = true
+anyhow.workspace = true
+serde.workspace = true

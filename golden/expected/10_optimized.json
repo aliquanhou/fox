@@ -1,0 +1,25 @@
+{
+    "sample_name":  "10_optimized",
+    "source_file":  "10_optimized.rs",
+    "compiler":  "rustc",
+    "compiler_version":  "1.98.1",
+    "optimization":  "release (opt-level=0)",
+    "architecture":  "x64",
+    "function_count":  381,
+    "function_names":  [
+
+                       ],
+    "basic_block_count":  6957,
+    "cfg_edge_count":  11218,
+    "call_edge_count":  2206,
+    "external_calls":  [
+
+                       ],
+    "ir_operation_count":  49283,
+    "functions":  [
+
+                  ],
+    "match_modes":  {
+
+                    }
+}

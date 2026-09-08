@@ -1,0 +1,47 @@
+{
+    "sample_name":  "09_function_pointer_O2",
+    "source_file":  "09_function_pointer.c",
+    "compiler":  "MSVC",
+    "compiler_version":  "19.44.35224",
+    "architecture":  "x64",
+    "optimization":  "-O2 (/O2)",
+    "expected_function_count":  5,
+    "expected_functions":  [
+                               {
+                                   "name":  "gt_add",
+                                   "start_rva":  "0x62A0",
+                                   "start_va":  "0x00000001400072A0",
+                                   "end_rva":  "0x62B0",
+                                   "end_va":  "0x00000001400072B0"
+                               },
+                               {
+                                   "name":  "gt_apply",
+                                   "start_rva":  "0x62B0",
+                                   "start_va":  "0x00000001400072B0",
+                                   "end_rva":  "0x62C0",
+                                   "end_va":  "0x00000001400072C0"
+                               },
+                               {
+                                   "name":  "gt_dispatch",
+                                   "start_rva":  "0x62C0",
+                                   "start_va":  "0x00000001400072C0",
+                                   "end_rva":  "0x6320",
+                                   "end_va":  "0x0000000140007320"
+                               },
+                               {
+                                   "name":  "gt_mul",
+                                   "start_rva":  "0x6320",
+                                   "start_va":  "0x0000000140007320",
+                                   "end_rva":  "0x6330",
+                                   "end_va":  "0x0000000140007330"
+                               },
+                               {
+                                   "name":  "gt_sub",
+                                   "start_rva":  "0x6330",
+                                   "start_va":  "0x0000000140007330",
+                                   "end_rva":  null,
+                                   "end_va":  null
+                               }
+                           ],
+    "ground_truth_source":  "MSVC linker .map file (independent of FOX)"
+}

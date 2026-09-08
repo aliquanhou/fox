@@ -1,0 +1,24 @@
+[package]
+name = "fox-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "FOX command-line interface"
+
+[[bin]]
+name = "fox"
+path = "src/main.rs"
+
+[dependencies]
+fox-core.workspace = true
+fox-binary.workspace = true
+fox-arch.workspace = true
+fox-disasm.workspace = true
+fox-ir.workspace = true
+fox-analysis.workspace = true
+fox-project.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+env_logger.workspace = true
+log.workspace = true
+serde_json.workspace = true

@@ -1,0 +1,25 @@
+{
+    "sample_name":  "04_nested_branch",
+    "source_file":  "04_nested_branch.rs",
+    "compiler":  "rustc",
+    "compiler_version":  "1.98.1",
+    "optimization":  "release (opt-level=0)",
+    "architecture":  "x64",
+    "function_count":  375,
+    "function_names":  [
+
+                       ],
+    "basic_block_count":  6949,
+    "cfg_edge_count":  11208,
+    "call_edge_count":  2195,
+    "external_calls":  [
+
+                       ],
+    "ir_operation_count":  49174,
+    "functions":  [
+
+                  ],
+    "match_modes":  {
+
+                    }
+}

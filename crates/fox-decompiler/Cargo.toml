@@ -1,0 +1,13 @@
+[package]
+name = "fox-decompiler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "FOX decompiler: IR to readable source"
+
+[dependencies]
+fox-core.workspace = true
+fox-ir.workspace = true
+fox-analysis.workspace = true
+anyhow.workspace = true
+log.workspace = true

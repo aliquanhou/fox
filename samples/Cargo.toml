@@ -1,0 +1,92 @@
+[package]
+name = "fox-golden-samples"
+version = "0.1.0"
+edition = "2021"
+description = "FOX Golden Sample binaries for regression testing"
+
+[workspace]
+
+[[bin]]
+name = "01_linear"
+path = "src/01_linear.rs"
+
+[[bin]]
+name = "02_branch"
+path = "src/02_branch.rs"
+
+[[bin]]
+name = "03_loop"
+path = "src/03_loop.rs"
+
+[[bin]]
+name = "04_nested_branch"
+path = "src/04_nested_branch.rs"
+
+[[bin]]
+name = "05_call"
+path = "src/05_call.rs"
+
+[[bin]]
+name = "06_recursive"
+path = "src/06_recursive.rs"
+
+[[bin]]
+name = "07_switch"
+path = "src/07_switch.rs"
+
+[[bin]]
+name = "08_pointer"
+path = "src/08_pointer.rs"
+
+[[bin]]
+name = "09_function_pointer"
+path = "src/09_function_pointer.rs"
+
+[[bin]]
+name = "10_optimized"
+path = "src/10_optimized.rs"
+
+[[bin]]
+name = "11_external_api"
+path = "src/11_external_api.rs"
+
+[[bin]]
+name = "12_indirect_call"
+path = "src/12_indirect_call.rs"
+
+[[bin]]
+name = "13_switch"
+path = "src/13_switch.rs"
+
+[[bin]]
+name = "14_pointer_arithmetic"
+path = "src/14_pointer_arithmetic.rs"
+
+[[bin]]
+name = "15_global_variable"
+path = "src/15_global_variable.rs"
+
+[[bin]]
+name = "16_struct_access"
+path = "src/16_struct_access.rs"
+
+[[bin]]
+name = "17_loop_phi"
+path = "src/17_loop_phi.rs"
+
+[[bin]]
+name = "18_nested_loop"
+path = "src/18_nested_loop.rs"
+
+[[bin]]
+name = "19_constant_propagation"
+path = "src/19_constant_propagation.rs"
+
+[[bin]]
+name = "20_dataflow"
+path = "src/20_dataflow.rs"
+
+[profile.release]
+opt-level = 0
+debug = false
+panic = "abort"

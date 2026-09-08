@@ -1,0 +1,26 @@
+{
+    "sample_name":  "05_nested_loop_O2",
+    "source_file":  "05_nested_loop.c",
+    "compiler":  "MSVC",
+    "compiler_version":  "19.44.35224",
+    "architecture":  "x64",
+    "optimization":  "-O2 (/O2)",
+    "expected_function_count":  2,
+    "expected_functions":  [
+                               {
+                                   "name":  "gt_matrix_sum",
+                                   "start_rva":  "0x6280",
+                                   "start_va":  "0x0000000140007280",
+                                   "end_rva":  "0x63E0",
+                                   "end_va":  "0x00000001400073E0"
+                               },
+                               {
+                                   "name":  "gt_triangular",
+                                   "start_rva":  "0x63E0",
+                                   "start_va":  "0x00000001400073E0",
+                                   "end_rva":  null,
+                                   "end_va":  null
+                               }
+                           ],
+    "ground_truth_source":  "MSVC linker .map file (independent of FOX)"
+}

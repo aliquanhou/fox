@@ -1,0 +1,33 @@
+{
+    "sample_name":  "10_optimized_O0",
+    "source_file":  "10_optimized.c",
+    "compiler":  "MSVC",
+    "compiler_version":  "19.44.35224",
+    "architecture":  "x64",
+    "optimization":  "-O0 (/Od)",
+    "expected_function_count":  3,
+    "expected_functions":  [
+                               {
+                                   "name":  "gt_opt_sum",
+                                   "start_rva":  "0x6280",
+                                   "start_va":  "0x0000000140007280",
+                                   "end_rva":  "0x62E0",
+                                   "end_va":  "0x00000001400072E0"
+                               },
+                               {
+                                   "name":  "gt_opt_fold",
+                                   "start_rva":  "0x62E0",
+                                   "start_va":  "0x00000001400072E0",
+                                   "end_rva":  "0x6330",
+                                   "end_va":  "0x0000000140007330"
+                               },
+                               {
+                                   "name":  "gt_opt_branch",
+                                   "start_rva":  "0x6330",
+                                   "start_va":  "0x0000000140007330",
+                                   "end_rva":  null,
+                                   "end_va":  null
+                               }
+                           ],
+    "ground_truth_source":  "MSVC linker .map file (independent of FOX)"
+}

@@ -1,0 +1,25 @@
+{
+    "sample_name":  "16_struct_access",
+    "source_file":  "16_struct_access.rs",
+    "compiler":  "rustc",
+    "compiler_version":  "1.98.1",
+    "optimization":  "release (opt-level=0)",
+    "architecture":  "x64",
+    "function_count":  358,
+    "function_names":  [
+
+                       ],
+    "basic_block_count":  6789,
+    "cfg_edge_count":  10958,
+    "call_edge_count":  2110,
+    "external_calls":  [
+
+                       ],
+    "ir_operation_count":  47642,
+    "functions":  [
+
+                  ],
+    "match_modes":  {
+
+                    }
+}

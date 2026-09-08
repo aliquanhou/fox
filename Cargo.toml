@@ -1,0 +1,40 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/fox-core",
+    "crates/fox-binary",
+    "crates/fox-arch",
+    "crates/fox-disasm",
+    "crates/fox-ir",
+    "crates/fox-analysis",
+    "crates/fox-decompiler",
+    "crates/fox-project",
+    "apps/cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/fox-re/fox"
+description = "FOX - Binary Reverse Engineering & Decompilation Platform"
+
+[workspace.dependencies]
+fox-core = { path = "crates/fox-core" }
+fox-binary = { path = "crates/fox-binary" }
+fox-arch = { path = "crates/fox-arch" }
+fox-disasm = { path = "crates/fox-disasm" }
+fox-ir = { path = "crates/fox-ir" }
+fox-analysis = { path = "crates/fox-analysis" }
+fox-decompiler = { path = "crates/fox-decompiler" }
+fox-project = { path = "crates/fox-project" }
+
+anyhow = "1.0"
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+log = "0.4"
+env_logger = "0.11"
+clap = { version = "4.5", features = ["derive"] }
+zydis = "4.1"
+goblin = "0.8"

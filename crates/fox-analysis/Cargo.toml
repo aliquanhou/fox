@@ -1,0 +1,18 @@
+[package]
+name = "fox-analysis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "FOX analysis: CFG, call graph, data flow, type recovery, symbol analysis"
+
+[dependencies]
+fox-core.workspace = true
+fox-binary.workspace = true
+fox-arch.workspace = true
+fox-disasm.workspace = true
+fox-ir.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true

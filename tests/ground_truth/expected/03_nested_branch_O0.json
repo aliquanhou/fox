@@ -1,0 +1,26 @@
+{
+    "sample_name":  "03_nested_branch_O0",
+    "source_file":  "03_nested_branch.c",
+    "compiler":  "MSVC",
+    "compiler_version":  "19.44.35224",
+    "architecture":  "x64",
+    "optimization":  "-O0 (/Od)",
+    "expected_function_count":  2,
+    "expected_functions":  [
+                               {
+                                   "name":  "gt_nested",
+                                   "start_rva":  "0x6280",
+                                   "start_va":  "0x0000000140007280",
+                                   "end_rva":  "0x62D0",
+                                   "end_va":  "0x00000001400072D0"
+                               },
+                               {
+                                   "name":  "gt_grade",
+                                   "start_rva":  "0x62D0",
+                                   "start_va":  "0x00000001400072D0",
+                                   "end_rva":  null,
+                                   "end_va":  null
+                               }
+                           ],
+    "ground_truth_source":  "MSVC linker .map file (independent of FOX)"
+}

@@ -1,0 +1,26 @@
+{
+    "sample_name":  "08_switch_O0",
+    "source_file":  "08_switch.c",
+    "compiler":  "MSVC",
+    "compiler_version":  "19.44.35224",
+    "architecture":  "x64",
+    "optimization":  "-O0 (/Od)",
+    "expected_function_count":  2,
+    "expected_functions":  [
+                               {
+                                   "name":  "gt_switch_day",
+                                   "start_rva":  "0x6280",
+                                   "start_va":  "0x0000000140007280",
+                                   "end_rva":  "0x6310",
+                                   "end_va":  "0x0000000140007310"
+                               },
+                               {
+                                   "name":  "gt_switch_op",
+                                   "start_rva":  "0x6310",
+                                   "start_va":  "0x0000000140007310",
+                                   "end_rva":  null,
+                                   "end_va":  null
+                               }
+                           ],
+    "ground_truth_source":  "MSVC linker .map file (independent of FOX)"
+}

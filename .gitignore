@@ -1,0 +1,21 @@
+# Rust build artifacts
+/target
+**/target
+
+# Ground truth build artifacts (binaries and metadata are generated)
+/tests/ground_truth/binaries/
+/tests/ground_truth/metadata/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary
+*.tmp
+*.log

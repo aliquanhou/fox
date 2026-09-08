@@ -1,0 +1,25 @@
+{
+    "sample_name":  "07_switch",
+    "source_file":  "07_switch.rs",
+    "compiler":  "rustc",
+    "compiler_version":  "1.98.1",
+    "optimization":  "release (opt-level=0)",
+    "architecture":  "x64",
+    "function_count":  383,
+    "function_names":  [
+
+                       ],
+    "basic_block_count":  6951,
+    "cfg_edge_count":  11208,
+    "call_edge_count":  2423,
+    "external_calls":  [
+
+                       ],
+    "ir_operation_count":  51006,
+    "functions":  [
+
+                  ],
+    "match_modes":  {
+
+                    }
+}

@@ -1,0 +1,33 @@
+{
+    "sample_name":  "07_recursion_O2",
+    "source_file":  "07_recursion.c",
+    "compiler":  "MSVC",
+    "compiler_version":  "19.44.35224",
+    "architecture":  "x64",
+    "optimization":  "-O2 (/O2)",
+    "expected_function_count":  3,
+    "expected_functions":  [
+                               {
+                                   "name":  "gt_factorial",
+                                   "start_rva":  "0x6280",
+                                   "start_va":  "0x0000000140007280",
+                                   "end_rva":  "0x62C0",
+                                   "end_va":  "0x00000001400072C0"
+                               },
+                               {
+                                   "name":  "gt_fibonacci",
+                                   "start_rva":  "0x62C0",
+                                   "start_va":  "0x00000001400072C0",
+                                   "end_rva":  "0x6310",
+                                   "end_va":  "0x0000000140007310"
+                               },
+                               {
+                                   "name":  "gt_gcd",
+                                   "start_rva":  "0x6310",
+                                   "start_va":  "0x0000000140007310",
+                                   "end_rva":  null,
+                                   "end_va":  null
+                               }
+                           ],
+    "ground_truth_source":  "MSVC linker .map file (independent of FOX)"
+}
