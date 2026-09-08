@@ -124,6 +124,26 @@ fn run_golden_test(name: &str) {
     };
 
     let actual = analyze_to_actual(name, &binary);
+
+    // Auto-update mode: write actual fixture as expected
+    if std::env::var("FOX_UPDATE_GOLDEN").is_ok() {
+        let expected_path = expected_dir().join(format!("{}.json", name));
+        // Merge actual data into expected fixture (preserve metadata)
+        let mut updated = expected.clone();
+        updated.function_count = actual.function_count;
+        updated.function_names = actual.function_names.clone();
+        updated.basic_block_count = actual.basic_block_count;
+        updated.cfg_edge_count = actual.cfg_edge_count;
+        updated.call_edge_count = actual.call_edge_count;
+        updated.external_calls = actual.external_calls.clone();
+        updated.ir_operation_count = actual.ir_operation_count;
+        let json = serde_json::to_string_pretty(&updated).unwrap();
+        std::fs::write(&expected_path, json).unwrap();
+        eprintln!("[UPDATED] {}: functions={}, blocks={}, edges={}",
+            name, actual.function_count, actual.basic_block_count, actual.cfg_edge_count);
+        return;
+    }
+
     let result = GoldenComparator::compare(&expected, &actual);
 
     if !result.passed {

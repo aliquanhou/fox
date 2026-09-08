@@ -142,6 +142,8 @@ pub enum EvidenceKind {
     JumpTableTarget,
     /// Function reached via thunk/JMP chain
     ThunkTarget,
+    /// Function address taken (loaded via LEA or stored in data)
+    AddressTaken,
 }
 
 impl fmt::Display for EvidenceKind {
@@ -215,6 +217,7 @@ impl fmt::Display for EvidenceKind {
             EvidenceKind::JumpTablePattern => write!(f, "Jump table pattern detected"),
             EvidenceKind::JumpTableTarget => write!(f, "Jump table target resolved"),
             EvidenceKind::ThunkTarget => write!(f, "Function reached via thunk/JMP chain"),
+            EvidenceKind::AddressTaken => write!(f, "Function address taken (pointer reference)"),
         }
     }
 }

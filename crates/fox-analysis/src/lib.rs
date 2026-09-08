@@ -223,6 +223,11 @@ impl FunctionDiscovery {
             }
         }
 
+        // Phase 3.5: Address-Taken Function Discovery
+        // Scan for LEA reg, [rip+disp] where effective address is executable.
+        // These are function pointer candidates (e.g., function pointer tables).
+        Self::discover_address_taken_functions(binary, disasm.as_ref(), &mut functions);
+
         // Phase 4: Prologue pattern matching (supplementary, lower weight)
         Self::scan_prologues(binary, &mut functions);
 
@@ -568,6 +573,39 @@ impl FunctionDiscovery {
         let mut to_follow: Vec<u64> = functions.keys().copied().collect();
         let mut visited = std::collections::HashSet::new();
 
+        // Also collect JMP targets from within function bodies (tail calls)
+        for func in functions.values() {
+            let addr = func.value.address.0;
+            let section = match binary
+                .sections
+                .iter()
+                .find(|s| s.contains_address(addr - binary.image_base))
+            {
+                Some(s) => s,
+                None => continue,
+            };
+            let off = (addr - binary.image_base - section.virtual_address) as usize
+                + section.raw_offset;
+            let end = (off + 512).min(binary.raw_data.len());
+            if off >= end {
+                continue;
+            }
+            let data = &binary.raw_data[off..end];
+            if let Ok(insts) = disasm.disassemble(data, addr) {
+                for inst in &insts {
+                    if inst.is_jump && !inst.is_conditional_jump {
+                        if let Some(target) = inst.jump_target {
+                            if Self::is_in_executable_section(binary, target)
+                                && target != addr
+                            {
+                                to_follow.push(target);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         while let Some(addr) = to_follow.pop() {
             if !visited.insert(addr) {
                 continue;
@@ -631,6 +669,102 @@ impl FunctionDiscovery {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    /// Discover address-taken functions: scan for LEA reg, [rip+disp] where
+    /// the effective address points into an executable section.
+    ///
+    /// This catches functions referenced via function pointers, vtables,
+    /// and other indirect call mechanisms that are not direct CALL targets.
+    ///
+    /// Evidence weight: 0.55 (medium — address reference is strong but
+    /// could be a data pointer or code label)
+    fn discover_address_taken_functions(
+        binary: &Binary,
+        disasm: &dyn fox_disasm::Disassembler,
+        functions: &mut BTreeMap<u64, WithEvidence<Function>>,
+    ) {
+        let mut taken_counts: BTreeMap<u64, usize> = BTreeMap::new();
+
+        for section in binary.executable_sections() {
+            let data = &binary.raw_data
+                [section.raw_offset..section.raw_offset + section.raw_size];
+            let base_addr = binary.image_base + section.virtual_address;
+
+            if let Ok(instructions) = disasm.disassemble(data, base_addr) {
+                for inst in &instructions {
+                    if !inst.mnemonic.eq_ignore_ascii_case("lea") {
+                        continue;
+                    }
+                    // Check second operand (source) for RIP-relative memory
+                    if let Some(src) = inst.operands_structured.get(1) {
+                        if let Some(mem) = &src.memory {
+                            if mem.is_rip_relative {
+                                if let Some(ea) = mem.effective_address {
+                                    if Self::is_in_executable_section(binary, ea) {
+                                        *taken_counts.entry(ea).or_insert(0) += 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Also scan read-only data sections for function pointers
+        for section in &binary.sections {
+            if section.is_writable() || section.is_executable() {
+                continue; // skip writable and executable (already scanned)
+            }
+            if section.raw_size == 0 {
+                continue;
+            }
+            let data = &binary.raw_data
+                [section.raw_offset..section.raw_offset + section.raw_size];
+            // Scan for 8-byte pointers that point into executable sections
+            let mut i = 0;
+            while i + 8 <= data.len() {
+                let ptr = u64::from_le_bytes([
+                    data[i], data[i+1], data[i+2], data[i+3],
+                    data[i+4], data[i+5], data[i+6], data[i+7],
+                ]);
+                if ptr >= binary.image_base && Self::is_in_executable_section(binary, ptr) {
+                    *taken_counts.entry(ptr).or_insert(0) += 1;
+                }
+                i += 8;
+            }
+        }
+
+        // Add candidates
+        for (addr, count) in &taken_counts {
+            let detail = format!("Address referenced {} time(s) via LEA/data", count);
+            if functions.contains_key(addr) {
+                if let Some(entry) = functions.get_mut(addr) {
+                    entry.evidence.push(
+                        Evidence::new(EvidenceKind::AddressTaken)
+                            .with_address(*addr)
+                            .with_detail(&detail)
+                            .with_weight(if *count >= 2 { 0.4 } else { 0.25 }),
+                    );
+                    entry.confidence = entry.evidence.confidence();
+                }
+            } else {
+                functions.insert(
+                    *addr,
+                    WithEvidence::new(Function::new(
+                        format!("sub_{:016X}", addr),
+                        Address(*addr),
+                    ))
+                    .with_evidence(
+                        Evidence::new(EvidenceKind::AddressTaken)
+                            .with_address(*addr)
+                            .with_detail(&detail)
+                            .with_weight(if *count >= 2 { 0.55 } else { 0.4 }),
+                    ),
+                );
             }
         }
     }
@@ -976,6 +1110,7 @@ pub struct AnalysisResult {
     pub functions: Vec<WithEvidence<Function>>,
     pub cfg: cfg::ControlFlowGraph,
     pub call_graph: callgraph::CallGraph,
+    pub identity_table: fox_core::identity::FunctionIdentityTable,
 }
 
 /// Run full analysis pipeline on a binary.
@@ -990,10 +1125,101 @@ pub fn analyze_binary(binary: &Binary) -> AnalysisResult {
     };
 
     let call_graph = callgraph::CallGraph::build(binary, &functions, &cfg.function_cfgs);
+    let identity_table = build_identity_table(binary, &functions, &call_graph);
 
     AnalysisResult {
         functions,
         cfg,
         call_graph,
+        identity_table,
     }
+}
+
+/// Build FunctionIdentityTable from discovered functions and call graph.
+///
+/// P0-3.4: Classifies each function address as Canonical/Thunk/Folded/Alias,
+/// records thunk relationships, and tracks address-taken functions.
+fn build_identity_table(
+    binary: &Binary,
+    functions: &[WithEvidence<Function>],
+    call_graph: &callgraph::CallGraph,
+) -> fox_core::identity::FunctionIdentityTable {
+    use fox_core::identity::{IdentityKind, FunctionIdentityTable};
+    let mut table = FunctionIdentityTable::new();
+
+    // First pass: classify each function
+    for func in functions {
+        let addr = func.value.address.0;
+
+        // Check evidence for address-taken
+        let has_address_taken = func.evidence.items.iter().any(|e| {
+            matches!(e.kind, fox_core::EvidenceKind::AddressTaken)
+        });
+
+        // Check if first instruction is JMP (thunk)
+        let mut is_thunk = false;
+        let mut thunk_target: Option<u64> = None;
+        if let Some(section) = binary
+            .sections
+            .iter()
+            .find(|s| s.contains_address(addr - binary.image_base))
+        {
+            let off = (addr - binary.image_base - section.virtual_address) as usize
+                + section.raw_offset;
+            if off + 16 <= binary.raw_data.len() {
+                let data = &binary.raw_data[off..off + 16];
+                if let Ok(disasm) = crate::create_disassembler(binary.architecture) {
+                    if let Ok(insts) = disasm.disassemble(data, addr) {
+                        if let Some(first) = insts.first() {
+                            if first.is_jump && !first.is_conditional_jump {
+                                if let Some(target) = first.jump_target {
+                                    is_thunk = true;
+                                    thunk_target = Some(target);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if is_thunk {
+            if let Some(target) = thunk_target {
+                table.record_thunk(addr, target);
+                // Set address_taken on thunk identity
+                if let Some(t) = table.binary_identities.get_mut(&addr) {
+                    t.address_taken = has_address_taken;
+                }
+                continue;
+            }
+        }
+
+        let ident = table.get_or_create(addr);
+        ident.address_taken = has_address_taken;
+        ident.kind = IdentityKind::Canonical;
+
+        // Count call references
+        ident.call_reference_count = call_graph
+            .nodes
+            .iter()
+            .flat_map(|n| n.incoming_calls.iter())
+            .filter(|&&caller| caller == addr)
+            .count();
+    }
+
+    // Record source symbol mappings from named functions
+    let named_funcs: Vec<(String, u64)> = functions
+        .iter()
+        .filter(|f| !f.value.name.starts_with("sub_"))
+        .map(|f| (f.value.name.clone(), f.value.address.0))
+        .collect();
+    for (name, addr) in &named_funcs {
+        if let Some(ident) = table.binary_identities.get(addr) {
+            if ident.is_canonical() {
+                table.record_source_mapping(name, *addr);
+            }
+        }
+    }
+
+    table
 }

@@ -144,6 +144,33 @@ impl std::fmt::Display for CallEdgeKind {
     }
 }
 
+/// Classification of indirect call operands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IndirectCallKind {
+    /// Register indirect call: `call rax`
+    Register,
+    /// Memory indirect call: `call [rax]` or `call [rsp+0x20]`
+    Memory,
+    /// Vtable candidate: `call [reg+disp]` (object pointer + vtable offset)
+    VtableCandidate,
+    /// IAT call: `call [rip+disp]` resolved to external import
+    Iat,
+    /// Unknown indirect call pattern
+    Unknown,
+}
+
+impl IndirectCallKind {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            IndirectCallKind::Register => "Register",
+            IndirectCallKind::Memory => "Memory",
+            IndirectCallKind::VtableCandidate => "VtableCandidate",
+            IndirectCallKind::Iat => "IAT",
+            IndirectCallKind::Unknown => "Unknown",
+        }
+    }
+}
+
 /// An edge in the call graph.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CallGraphEdge {
@@ -153,6 +180,8 @@ pub struct CallGraphEdge {
     pub call_instruction: u64,
     /// Resolved symbol name for external calls (e.g., "kernel32.dll!CreateFileW")
     pub resolved_symbol: Option<String>,
+    /// For indirect calls, the specific kind of indirect call
+    pub indirect_kind: Option<IndirectCallKind>,
     /// Evidence explaining why this edge exists
     pub evidence: EvidenceList,
 }

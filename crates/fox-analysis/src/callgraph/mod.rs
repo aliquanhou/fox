@@ -10,7 +10,7 @@
 
 use crate::Function;
 use fox_binary::Binary;
-use fox_core::{Address, CallEdgeKind, CallGraphEdge, Evidence, EvidenceKind, WithEvidence};
+use fox_core::{Address, CallEdgeKind, CallGraphEdge, Evidence, EvidenceKind, IndirectCallKind, WithEvidence};
 use serde::{Deserialize, Serialize};
 
 /// A node in the call graph.
@@ -155,6 +155,7 @@ impl CallGraph {
             callee: None,
             call_instruction: inst.address,
             resolved_symbol: None,
+            indirect_kind: None,
             evidence: fox_core::EvidenceList::new(),
         };
 
@@ -203,6 +204,7 @@ impl CallGraph {
                             edge.kind = CallEdgeKind::External;
                             edge.callee = Some(effective_addr);
                             edge.resolved_symbol = Some(format!("{}!{}", dll, func));
+                            edge.indirect_kind = Some(IndirectCallKind::Iat);
                             edge.evidence.push(
                                 Evidence::new(EvidenceKind::ImportEntry)
                                     .with_address(effective_addr)
@@ -220,8 +222,29 @@ impl CallGraph {
             }
         }
 
-        // Case 3: Indirect call, unresolved
+        // Case 3: Indirect call, unresolved — classify operand type
         edge.kind = CallEdgeKind::Indirect;
+        for op in &inst.operands_structured {
+            if op.register.is_some() {
+                edge.indirect_kind = Some(IndirectCallKind::Register);
+                break;
+            }
+            if let Some(ref mem) = op.memory {
+                if mem.is_rip_relative {
+                    // RIP-relative but not IAT — could be global function pointer
+                    edge.indirect_kind = Some(IndirectCallKind::Memory);
+                } else if mem.base.is_some() && mem.index.is_none() && mem.displacement != 0 {
+                    // [reg+disp] pattern — vtable candidate
+                    edge.indirect_kind = Some(IndirectCallKind::VtableCandidate);
+                } else {
+                    edge.indirect_kind = Some(IndirectCallKind::Memory);
+                }
+                break;
+            }
+        }
+        if edge.indirect_kind.is_none() {
+            edge.indirect_kind = Some(IndirectCallKind::Unknown);
+        }
         edge.evidence.push(
             Evidence::new(EvidenceKind::IndirectCallEdge)
                 .with_address(inst.address)
