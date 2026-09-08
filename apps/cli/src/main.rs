@@ -810,48 +810,28 @@ fn collect_instructions(cfg: &fox_analysis::cfg::FunctionCfg) -> Vec<fox_disasm:
 fn cmd_dataflow(file: &PathBuf, address: Option<&str>, json: bool) -> Result<(), String> {
     let binary = load_binary(file)?;
     let result = fox_analysis::analyze_binary(&binary);
-    let (func, cfg) = select_function(&result, address).ok_or("No function found")?;
+    let (func, _cfg) = select_function(&result, address).ok_or("No function found")?;
+    let addr = func.address.0;
 
-    // Build CFG-aware block tuples
-    let block_data: Vec<(usize, Vec<fox_ir::IRInstruction>, Vec<usize>, Vec<usize>)> = cfg
-        .blocks
-        .iter()
-        .map(|bb| {
-            let ir_insts: Vec<_> = bb
-                .instructions
-                .iter()
-                .map(fox_ir::l1::IRTranslator::translate)
-                .collect();
-            let succs: Vec<usize> = bb
-                .successors
-                .iter()
-                .filter_map(|e| e.target_block)
-                .collect();
-            (bb.id, ir_insts, bb.predecessors.clone(), succs)
-        })
-        .collect();
+    // P0-4.1: Use unified pipeline result (single source of truth)
+    let ctx = result
+        .pipeline
+        .function_analysis
+        .get(&addr)
+        .ok_or_else(|| format!("Function 0x{:X} not in analysis pipeline (no CFG?)", addr))?;
 
-    let block_refs: Vec<(usize, &[fox_ir::IRInstruction], &[usize], &[usize])> = block_data
-        .iter()
-        .map(|(id, insts, preds, succs)| {
-            (*id, insts.as_slice(), preds.as_slice(), succs.as_slice())
-        })
-        .collect();
-
-    let df = fox_analysis::dataflow::CfgDataFlowResult::analyze(
-        func.address.0,
-        &block_refs,
-        cfg.entry_block,
-    );
+    let df = ctx
+        .dataflow
+        .as_ref()
+        .ok_or_else(|| format!("DataFlow not available for function 0x{:X}", addr))?;
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&df).unwrap());
+        println!("{}", serde_json::to_string_pretty(df).unwrap());
     } else {
         println!(
-            "=== FOX Data Flow (CFG-aware): {} @ {} ===",
+            "=== FOX Data Flow (CFG-aware, pipeline): {} @ {} ===",
             func.name, func.address
         );
-        println!("Blocks: {}", cfg.blocks.len());
         println!("RD iterations: {}", df.reaching_definitions.iterations);
         println!("LV iterations: {}", df.live_variables.iterations);
         println!("CP iterations: {}", df.constant_propagation.iterations);
@@ -918,47 +898,31 @@ fn cmd_dominators(file: &PathBuf, address: Option<&str>, json: bool) -> Result<(
 fn cmd_ssa(file: &PathBuf, address: Option<&str>, json: bool) -> Result<(), String> {
     let binary = load_binary(file)?;
     let result = fox_analysis::analyze_binary(&binary);
-    let (func, cfg) = select_function(&result, address).ok_or("No function found")?;
+    let (func, _cfg) = select_function(&result, address).ok_or("No function found")?;
+    let addr = func.address.0;
 
-    let ir_blocks: Vec<_> = cfg
-        .blocks
-        .iter()
-        .map(|bb| {
-            let ir_insts: Vec<_> = bb
-                .instructions
-                .iter()
-                .map(fox_ir::l1::IRTranslator::translate)
-                .collect();
-            fox_ir::IRBasicBlock {
-                id: bb.id,
-                start_address: bb.start_address,
-                end_address: bb.end_address,
-                instructions: ir_insts,
-                successors: bb
-                    .successors
-                    .iter()
-                    .filter_map(|e| e.target_block)
-                    .collect(),
-                predecessors: bb.predecessors.clone(),
-            }
-        })
-        .collect();
+    // P0-4.1: Use unified pipeline result (single source of truth)
+    let ctx = result
+        .pipeline
+        .function_analysis
+        .get(&addr)
+        .ok_or_else(|| format!("Function 0x{:X} not in analysis pipeline (no CFG?)", addr))?;
 
-    let ir_func = fox_ir::IRFunction {
-        name: func.name.clone(),
-        address: func.address,
-        basic_blocks: ir_blocks,
-        entry_block: cfg.entry_block,
-    };
-
-    let ssa = fox_analysis::ssa::SSAConstructor::construct_proper(&ir_func);
+    let ssa = ctx
+        .ssa
+        .as_ref()
+        .ok_or_else(|| format!("SSA not available for function 0x{:X}", addr))?;
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&ssa).unwrap());
+        println!("{}", serde_json::to_string_pretty(ssa).unwrap());
     } else {
-        println!("=== FOX SSA: {} @ {} ===", func.name, func.address);
+        println!(
+            "=== FOX SSA: {} @ {} (pipeline) ===",
+            func.name, func.address
+        );
         println!("Phi nodes: {}", ssa.phi_nodes.len());
         println!("Variables versioned: {}", ssa.variable_versions.len());
+        println!("Proper renaming: {}", ssa.proper_renaming);
         for (var, ver) in ssa.variable_versions.iter().take(10) {
             println!("  {}: v{}", var, ver);
         }

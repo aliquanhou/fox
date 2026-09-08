@@ -15,6 +15,7 @@ pub mod dataflow;
 pub mod dominators;
 pub mod golden;
 pub mod jump_table;
+pub mod pipeline;
 pub mod ssa;
 pub mod symbol;
 pub mod type_recovery;
@@ -1110,6 +1111,10 @@ pub struct AnalysisResult {
     pub cfg: cfg::ControlFlowGraph,
     pub call_graph: callgraph::CallGraph,
     pub identity_table: fox_core::identity::FunctionIdentityTable,
+    /// P0-4.1: Unified per-function analysis pipeline results.
+    /// Contains IR/SSA/DataFlow/Memory/Evidence for each function.
+    #[serde(default)]
+    pub pipeline: pipeline::PipelineResult,
 }
 
 /// Run full analysis pipeline on a binary.
@@ -1126,11 +1131,16 @@ pub fn analyze_binary(binary: &Binary) -> AnalysisResult {
     let call_graph = callgraph::CallGraph::build(binary, &functions, &cfg.function_cfgs);
     let identity_table = build_identity_table(binary, &functions, &call_graph);
 
+    // P0-4.1: Unified per-function analysis pipeline
+    // IR → SSA → DataFlow → Memory → Evidence, all sharing the same CFG and IR
+    let pipeline = pipeline::AnalysisPipeline::run(binary, &functions, &cfg);
+
     AnalysisResult {
         functions,
         cfg,
         call_graph,
         identity_table,
+        pipeline,
     }
 }
 
