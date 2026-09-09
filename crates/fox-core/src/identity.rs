@@ -26,6 +26,9 @@ pub enum IdentityKind {
     Canonical,
     /// Thunk: single JMP instruction redirecting to a canonical function.
     Thunk,
+    /// ImportThunk: single indirect JMP through IAT to an external function.
+    /// e.g., `jmp dword ptr [IAT_entry]` on x86, `jmp [rip+disp]` on x64.
+    ImportThunk,
     /// Folded: this binary function is the result of ICF folding multiple
     /// source functions into one body.
     Folded,
@@ -41,6 +44,7 @@ impl IdentityKind {
         match self {
             IdentityKind::Canonical => "Canonical",
             IdentityKind::Thunk => "Thunk",
+            IdentityKind::ImportThunk => "ImportThunk",
             IdentityKind::Folded => "Folded (ICF)",
             IdentityKind::Alias => "Alias",
             IdentityKind::Unknown => "Unknown",

@@ -674,6 +674,103 @@ impl FunctionDiscovery {
         }
     }
 
+    /// P0-5.2: Identify import thunks among discovered functions.
+    ///
+    /// An import thunk is a single indirect JMP through an IAT entry:
+    ///   x86:  jmp dword ptr [IAT_entry_VA]
+    ///   x64:  jmp [rip+disp]  (IAT entry)
+    ///
+    /// Only recognized when the JMP target address can be proven to belong
+    /// to the PE Import Address Table. Pattern-only matching is explicitly
+    /// rejected (Fail-Closed).
+    ///
+    /// Returns: HashMap<thunk_address, (dll_name, func_name)>
+    pub fn identify_import_thunks(
+        binary: &Binary,
+        disasm: &dyn fox_disasm::Disassembler,
+        functions: &[WithEvidence<Function>],
+    ) -> std::collections::HashMap<u64, (String, String)> {
+        let mut thunks = std::collections::HashMap::new();
+
+        // Build IAT VA -> (dll, func) map
+        let mut iat_map = std::collections::HashMap::new();
+        for import in &binary.imports {
+            for func in &import.functions {
+                let iat_va = func.iat_address + binary.image_base;
+                let name = func
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("ordinal_{}", func.ordinal.unwrap_or(0)));
+                iat_map.insert(iat_va, (import.dll_name.clone(), name));
+            }
+        }
+
+        if iat_map.is_empty() {
+            return thunks;
+        }
+
+        for func in functions {
+            let addr = func.value.address.0;
+
+            // Disassemble first instruction at this address
+            let section = match binary
+                .sections
+                .iter()
+                .find(|s| s.contains_address(addr - binary.image_base))
+            {
+                Some(s) => s,
+                None => continue,
+            };
+            let off =
+                (addr - binary.image_base - section.virtual_address) as usize + section.raw_offset;
+            if off + 16 > binary.raw_data.len() {
+                continue;
+            }
+            let data = &binary.raw_data[off..off + 16.min(binary.raw_data.len() - off)];
+
+            let insts = match disasm.disassemble(data, addr) {
+                Ok(i) => i,
+                Err(_) => continue,
+            };
+
+            if let Some(first) = insts.first() {
+                // Must be an unconditional (non-conditional) JMP
+                if !first.is_jump || first.is_conditional_jump {
+                    continue;
+                }
+
+                // Must be INDIRECT jump (memory operand), not direct JMP
+                // Direct JMP thunks are handled by follow_thunks (MSVC O2 jump islands)
+                let mut iat_target_va: Option<u64> = None;
+
+                for op in &first.operands_structured {
+                    if let Some(ref mem) = op.memory {
+                        // x64: RIP-relative → effective_address is the IAT entry VA
+                        if mem.is_rip_relative {
+                            if let Some(ea) = mem.effective_address {
+                                iat_target_va = Some(ea);
+                            }
+                        }
+                        // x86: absolute address [disp32] → base=None, index=None, displacement=IAT VA
+                        else if mem.base.is_none() && mem.index.is_none() && mem.displacement != 0
+                        {
+                            iat_target_va = Some(mem.displacement as u64);
+                        }
+                    }
+                }
+
+                // Must resolve to an IAT entry (Fail-Closed: no IAT membership → not ImportThunk)
+                if let Some(iat_va) = iat_target_va {
+                    if let Some((dll, func_name)) = iat_map.get(&iat_va) {
+                        thunks.insert(addr, (dll.clone(), func_name.clone()));
+                    }
+                }
+            }
+        }
+
+        thunks
+    }
+
     /// Discover address-taken functions: scan for LEA reg, [rip+disp] where
     /// the effective address points into an executable section.
     ///
@@ -1145,14 +1242,23 @@ fn analyze_binary_native(binary: &Binary) -> AnalysisResult {
     let functions = FunctionDiscovery::discover(binary);
 
     let disasm = create_disassembler(binary.architecture).ok();
+
+    // P0-5.2: Identify import thunks (jmp [IAT]) before CFG/CallGraph/Identity
+    let import_thunks = if let Some(d) = disasm.as_ref() {
+        FunctionDiscovery::identify_import_thunks(binary, d.as_ref(), &functions)
+    } else {
+        std::collections::HashMap::new()
+    };
+
     let cfg = if let Some(d) = disasm.as_ref() {
         cfg::ControlFlowGraph::build(binary, &functions, d.as_ref())
     } else {
         cfg::ControlFlowGraph::new()
     };
 
-    let call_graph = callgraph::CallGraph::build(binary, &functions, &cfg.function_cfgs);
-    let identity_table = build_identity_table(binary, &functions, &call_graph);
+    let call_graph =
+        callgraph::CallGraph::build(binary, &functions, &cfg.function_cfgs, &import_thunks);
+    let identity_table = build_identity_table(binary, &functions, &call_graph, &import_thunks);
 
     // P0-4.1: Unified per-function analysis pipeline
     // IR → SSA → DataFlow → Memory → Evidence, all sharing the same CFG and IR
@@ -1175,6 +1281,7 @@ fn build_identity_table(
     binary: &Binary,
     functions: &[WithEvidence<Function>],
     call_graph: &callgraph::CallGraph,
+    import_thunks: &std::collections::HashMap<u64, (String, String)>,
 ) -> fox_core::identity::FunctionIdentityTable {
     use fox_core::identity::{FunctionIdentityTable, IdentityKind};
     let mut table = FunctionIdentityTable::new();
@@ -1182,6 +1289,21 @@ fn build_identity_table(
     // First pass: classify each function
     for func in functions {
         let addr = func.value.address.0;
+
+        // P0-5.2: Check if this is an import thunk (jmp [IAT])
+        if let Some((dll, func_name)) = import_thunks.get(&addr) {
+            let ident = table.get_or_create(addr);
+            ident.kind = IdentityKind::ImportThunk;
+            ident.source_symbols.push(format!("{}!{}", dll, func_name));
+            // Count call references
+            ident.call_reference_count = call_graph
+                .nodes
+                .iter()
+                .flat_map(|n| n.incoming_calls.iter())
+                .filter(|&&caller| caller == addr)
+                .count();
+            continue;
+        }
 
         // Check evidence for address-taken
         let has_address_taken = func
@@ -1253,6 +1375,12 @@ fn build_identity_table(
                 table.record_source_mapping(name, *addr);
             }
         }
+    }
+
+    // P0-5.2: Record source mappings for import thunks (DLL!FunctionName)
+    for (addr, (dll, func_name)) in import_thunks {
+        let sym = format!("{}!{}", dll, func_name);
+        table.record_source_mapping(&sym, *addr);
     }
 
     table

@@ -101,7 +101,9 @@ fn thunk_fp_regression_redirect_relations_valid() {
                 .get(to)
                 .expect("ThunkRedirect target not in identity table");
             assert!(
-                to_id.is_canonical() || matches!(to_id.kind, IdentityKind::Thunk),
+                to_id.is_canonical()
+                    || matches!(to_id.kind, IdentityKind::Thunk)
+                    || matches!(to_id.kind, IdentityKind::ImportThunk),
                 "ThunkRedirect to 0x{:X} but target kind is {:?}",
                 to,
                 to_id.kind

@@ -52,6 +52,7 @@ impl CallGraph {
         binary: &Binary,
         functions: &[WithEvidence<Function>],
         function_cfgs: &[crate::cfg::FunctionCfg],
+        import_thunks: &std::collections::HashMap<u64, (String, String)>,
     ) -> Self {
         let mut graph = CallGraph::new();
 
@@ -79,7 +80,8 @@ impl CallGraph {
                 for block in &cfg.blocks {
                     for inst in &block.instructions {
                         if inst.is_call {
-                            let edge = Self::classify_call(inst, &func_by_addr, &iat_map);
+                            let edge =
+                                Self::classify_call(inst, &func_by_addr, &iat_map, import_thunks);
                             match edge.kind {
                                 CallEdgeKind::Direct => {
                                     if edge.resolved_symbol.is_some() {
@@ -150,6 +152,7 @@ impl CallGraph {
         inst: &fox_disasm::Instruction,
         func_by_addr: &std::collections::HashMap<u64, &String>,
         iat_map: &std::collections::HashMap<u64, (String, String)>,
+        import_thunks: &std::collections::HashMap<u64, (String, String)>,
     ) -> CallGraphEdge {
         let mut edge = CallGraphEdge {
             kind: CallEdgeKind::Unknown,
@@ -164,6 +167,19 @@ impl CallGraph {
         // Case 1: Direct call with known target
         if let Some(target) = inst.call_target {
             edge.callee = Some(target);
+
+            // P0-5.2: Check if target is an import thunk (jmp [IAT])
+            if let Some((dll, func)) = import_thunks.get(&target) {
+                edge.kind = CallEdgeKind::External;
+                edge.resolved_symbol = Some(format!("{}!{}", dll, func));
+                edge.evidence.push(
+                    Evidence::new(EvidenceKind::ImportEntry)
+                        .with_address(target)
+                        .with_detail(format!("Import thunk @ 0x{:X} -> {}!{}", target, dll, func))
+                        .with_weight(0.95),
+                );
+                return edge;
+            }
 
             if let Some((dll, func)) = iat_map.get(&target) {
                 // Direct call to IAT entry (rare on x64, common on x86)
