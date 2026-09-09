@@ -1,10 +1,10 @@
-//! FOX P0-3.4R Negative Tests & Evidence Closure
+﻿//! FOX P0-3.4R Negative Tests & Evidence Closure
 //!
-//! R3: Thunk False Positive Regression — function-body JMP must not be
+//! R3: Thunk False Positive Regression 鈥?function-body JMP must not be
 //!     misidentified as ThunkRedirect.
-//! R4: Address-Taken Negative Tests — basic-block/jump-table/code-label
+//! R4: Address-Taken Negative Tests 鈥?basic-block/jump-table/code-label
 //!     addresses must not directly become Confirmed Function.
-//! R5: Identity Evidence Chain — Identity → Relation → Evidence → Instruction.
+//! R5: Identity Evidence Chain 鈥?Identity 鈫?Relation 鈫?Evidence 鈫?Instruction.
 
 use fox_analysis::analyze_binary;
 use fox_binary::Binary;
@@ -34,7 +34,7 @@ fn thunk_fp_regression_function_body_jmp_not_thunk() {
     // 02_if_else has internal JMPs (branch targets) but functions start with
     // prologue, not JMP. Verify no function-body JMP creates a false Thunk.
     let binary = load_sample("02_if_else_O2");
-    let result = analyze_binary(&binary);
+    let result = analyze_binary(&binary).unwrap();
 
     let thunk_count = result
         .identity_table
@@ -78,7 +78,7 @@ fn thunk_fp_regression_function_body_jmp_not_thunk() {
 #[test]
 fn thunk_fp_regression_redirect_relations_valid() {
     let binary = load_sample("08_switch_O2");
-    let result = analyze_binary(&binary);
+    let result = analyze_binary(&binary).unwrap();
 
     for rel in &result.identity_table.relations {
         if let fox_core::identity::IdentityRelation::ThunkRedirect { from, to } = rel {
@@ -135,7 +135,7 @@ fn thunk_fp_regression_redirect_relations_valid() {
 #[test]
 fn address_taken_negative_evidence_alone_not_confirmed() {
     let binary = load_sample("09_function_pointer_O2");
-    let result = analyze_binary(&binary);
+    let result = analyze_binary(&binary).unwrap();
 
     let mut address_taken_only = 0;
     let mut address_taken_confirmed = 0;
@@ -189,7 +189,7 @@ fn address_taken_negative_evidence_alone_not_confirmed() {
 #[test]
 fn address_taken_negative_not_all_executable_addresses_are_functions() {
     let binary = load_sample("08_switch_O2");
-    let result = analyze_binary(&binary);
+    let result = analyze_binary(&binary).unwrap();
 
     // Count functions with AddressTaken evidence
     let address_taken_funcs: Vec<_> = result
@@ -239,7 +239,7 @@ fn address_taken_negative_not_all_executable_addresses_are_functions() {
         });
 
         if inside_other {
-            // Address inside another function — likely a basic block or jump
+            // Address inside another function 鈥?likely a basic block or jump
             // table target, not a function entry. Must not be Confirmed.
             assert!(
                 at_func.confidence.0 < 0.85,
@@ -261,12 +261,12 @@ fn address_taken_negative_not_all_executable_addresses_are_functions() {
 // ============================================================================
 
 /// Verify that every Thunk identity can trace back to:
-/// Identity → Relation (ThunkRedirect) → Evidence (ThunkTarget in function)
-/// → Instruction (JMP at thunk address) → Binary offset.
+/// Identity 鈫?Relation (ThunkRedirect) 鈫?Evidence (ThunkTarget in function)
+/// 鈫?Instruction (JMP at thunk address) 鈫?Binary offset.
 #[test]
 fn identity_evidence_chain_thunk() {
     let binary = load_sample("08_switch_O2");
-    let result = analyze_binary(&binary);
+    let result = analyze_binary(&binary).unwrap();
 
     let mut verified = 0;
     for (addr, id) in &result.identity_table.binary_identities {
@@ -275,7 +275,7 @@ fn identity_evidence_chain_thunk() {
         }
         let target = id.thunk_target.expect("thunk has target");
 
-        // 1. Identity exists ✓ (we're iterating it)
+        // 1. Identity exists 鉁?(we're iterating it)
         // 2. Relation exists: ThunkRedirect { from: addr, to: target }
         let has_relation = result.identity_table.relations.iter().any(|r| {
             matches!(
@@ -326,7 +326,7 @@ fn identity_evidence_chain_thunk() {
 #[test]
 fn identity_evidence_chain_source_mapping() {
     let binary = load_sample("06_direct_call_O2");
-    let result = analyze_binary(&binary);
+    let result = analyze_binary(&binary).unwrap();
 
     for (addr, id) in &result.identity_table.binary_identities {
         if id.source_symbols.is_empty() {

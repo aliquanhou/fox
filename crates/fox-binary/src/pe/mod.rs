@@ -11,7 +11,8 @@
 //! - Architecture Detection
 
 use crate::{
-    Binary, BinaryFormat, BinaryString, Export, Import, ImportFunction, Relocation, Section,
+    Binary, BinaryFormat, BinaryString, ExecutionModel, Export, Import, ImportFunction, Relocation,
+    Section,
 };
 use fox_arch::Architecture;
 use fox_core::{FoxError, FoxResult};
@@ -80,6 +81,12 @@ impl PE {
         let reloc_dd_rva = read_u32(data, dd_offset + 40)? as u64; // Base Relocation is directory index 5
         let reloc_dd_size = read_u32(data, dd_offset + 44)? as usize;
 
+        // P0-4.5: CLR/COM Descriptor (Data Directory index 14)
+        // Canonical indicator of .NET managed assemblies.
+        let clr_dd_rva = read_u32(data, dd_offset + 112)? as u64; // index 14 * 8 = 112
+        let clr_dd_size = read_u32(data, dd_offset + 116)? as usize;
+        let clr_present = clr_dd_rva != 0 && clr_dd_size != 0;
+
         // Section Table
         let section_table_offset = opt_offset + size_of_optional_header;
         let mut sections = Vec::with_capacity(number_of_sections);
@@ -143,9 +150,32 @@ impl PE {
 
         let _ = characteristics; // used for validation if needed
 
+        // P0-4.5: Determine execution model with evidence trail.
+        let mut reality_evidence = Vec::new();
+        reality_evidence.push(format!("PE Machine=0x{:04X} ({})", machine, architecture));
+        if clr_present {
+            reality_evidence.push(format!(
+                "CLR/COM Descriptor present: DataDirectory[14] RVA=0x{:X}, Size={}",
+                clr_dd_rva, clr_dd_size
+            ));
+        } else {
+            reality_evidence.push("CLR/COM Descriptor absent: DataDirectory[14] is zero".into());
+        }
+
+        let execution_model = if clr_present {
+            reality_evidence.push("Classification: ManagedCLR (CLR header is canonical indicator)".into());
+            ExecutionModel::ManagedCLR
+        } else {
+            reality_evidence.push("Classification: Native (no CLR header)".into());
+            ExecutionModel::Native
+        };
+
         Ok(Binary {
             format,
             architecture,
+            execution_model,
+            clr_present,
+            reality_evidence,
             entry_point: image_base + entry_point_rva,
             image_base,
             size: data.len(),
@@ -519,5 +549,73 @@ mod tests {
         assert_eq!(read_u16(&data, 0).unwrap(), 0x0201);
         assert_eq!(read_u32(&data, 0).unwrap(), 0x04030201);
         assert_eq!(read_u64(&data, 0).unwrap(), 0x0807060504030201);
+    }
+
+    /// Build a minimal PE32 binary with optional CLR data directory.
+    fn make_minimal_pe32(clr_rva: u32, clr_size: u32) -> Vec<u8> {
+        let mut data = vec![0u8; 0x200];
+        data[0..2].copy_from_slice(b"MZ");
+        data[0x3C..0x40].copy_from_slice(&0x80u32.to_le_bytes()); // e_lfanew
+        data[0x80..0x84].copy_from_slice(b"PE\0\0");
+        // COFF header at 0x84
+        data[0x84..0x86].copy_from_slice(&0x014Cu16.to_le_bytes()); // machine x86
+        data[0x86..0x88].copy_from_slice(&1u16.to_le_bytes()); // 1 section
+        data[0x94..0x96].copy_from_slice(&0xE0u16.to_le_bytes()); // size of optional header
+                                                                  // Optional header at 0x98
+        data[0x98..0x9A].copy_from_slice(&0x10Bu16.to_le_bytes()); // PE32 magic
+        data[0xA8..0xAC].copy_from_slice(&0x1000u32.to_le_bytes()); // entry point
+        data[0xB4..0xB8].copy_from_slice(&0x10000000u32.to_le_bytes()); // image base
+                                                                        // Data directories start at optional+96 = 0x98+0x60 = 0xF8
+                                                                        // CLR is index 14: offset 0xF8 + 14*8 = 0xF8 + 0x70 = 0x168
+        data[0x168..0x16C].copy_from_slice(&clr_rva.to_le_bytes());
+        data[0x16C..0x170].copy_from_slice(&clr_size.to_le_bytes());
+        // Section table at 0x98 + 0xE0 = 0x178
+        data[0x178..0x180].copy_from_slice(b".text\0\0\0");
+        data[0x180..0x184].copy_from_slice(&0x100u32.to_le_bytes()); // virtual size
+        data[0x184..0x188].copy_from_slice(&0x1000u32.to_le_bytes()); // virtual address
+        data[0x188..0x18C].copy_from_slice(&0x100u32.to_le_bytes()); // raw size
+        data[0x18C..0x190].copy_from_slice(&0x100u32.to_le_bytes()); // raw offset
+        data[0x19C..0x1A0].copy_from_slice(&0x60000020u32.to_le_bytes()); // characteristics RX
+        data
+    }
+
+    #[test]
+    fn test_clr_detection_present() {
+        let data = make_minimal_pe32(0x2008, 72);
+        let binary = Binary::load(data).unwrap();
+        assert!(binary.clr_present);
+        assert_eq!(binary.execution_model, ExecutionModel::ManagedCLR);
+        assert!(!binary.execution_model.native_pipeline_applicable());
+    }
+
+    #[test]
+    fn test_clr_detection_absent() {
+        let data = make_minimal_pe32(0, 0);
+        let binary = Binary::load(data).unwrap();
+        assert!(!binary.clr_present);
+        assert_eq!(binary.execution_model, ExecutionModel::Native);
+        assert!(binary.execution_model.native_pipeline_applicable());
+    }
+
+    #[test]
+    fn test_execution_model_display() {
+        assert_eq!(ExecutionModel::Native.display_name(), "Native");
+        assert_eq!(
+            ExecutionModel::ManagedCLR.display_name(),
+            "Managed (.NET CLR)"
+        );
+        assert_eq!(
+            ExecutionModel::MixedMode.display_name(),
+            "Mixed (CLR + Native)"
+        );
+        assert_eq!(ExecutionModel::Unknown.display_name(), "Unknown");
+    }
+
+    #[test]
+    fn test_native_pipeline_applicable() {
+        assert!(ExecutionModel::Native.native_pipeline_applicable());
+        assert!(!ExecutionModel::ManagedCLR.native_pipeline_applicable());
+        assert!(!ExecutionModel::MixedMode.native_pipeline_applicable());
+        assert!(!ExecutionModel::Unknown.native_pipeline_applicable());
     }
 }

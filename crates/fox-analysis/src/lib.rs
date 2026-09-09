@@ -23,7 +23,7 @@ pub mod type_recovery;
 pub mod value_flow;
 
 use fox_binary::Binary;
-use fox_core::{Address, Confidence, Evidence, EvidenceKind, WithEvidence};
+use fox_core::{Address, Confidence, Evidence, EvidenceKind, FoxError, FoxResult, WithEvidence};
 use fox_disasm::create_disassembler;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -1120,7 +1120,28 @@ pub struct AnalysisResult {
 }
 
 /// Run full analysis pipeline on a binary.
-pub fn analyze_binary(binary: &Binary) -> AnalysisResult {
+/// P0-4.5: Safe Dispatch — analyze binary only if execution model is Native.
+///
+/// Returns `FoxError::UnsupportedExecutionModel` for ManagedCLR / MixedMode / Unknown,
+/// preventing the Native Pipeline from scanning non-native code (e.g. .NET IL).
+pub fn analyze_binary(binary: &Binary) -> FoxResult<AnalysisResult> {
+    if !binary.execution_model.native_pipeline_applicable() {
+        return Err(FoxError::UnsupportedExecutionModel(format!(
+            "Container: {:?}, Architecture: {}, Execution Model: {}, CLR: {}, Native Pipeline: NOT DISPATCHED",
+            binary.format,
+            binary.architecture,
+            binary.execution_model.display_name(),
+            binary.clr_present,
+        )));
+    }
+
+    Ok(analyze_binary_native(binary))
+}
+
+/// Native analysis pipeline (P0-4.1 unified pipeline).
+///
+/// Only callable after Safe Dispatch confirms ExecutionModel::Native.
+fn analyze_binary_native(binary: &Binary) -> AnalysisResult {
     let functions = FunctionDiscovery::discover(binary);
 
     let disasm = create_disassembler(binary.architecture).ok();

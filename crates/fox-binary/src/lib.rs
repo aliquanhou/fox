@@ -23,6 +23,39 @@ pub enum BinaryFormat {
     Unknown,
 }
 
+/// Execution model of the binary code.
+///
+/// P0-4.5: Distinguishes native machine code from managed/IL code.
+/// A PE32+x86 binary may be either Native x86 or ManagedCLR (.NET).
+/// Architecture and ExecutionModel are independent dimensions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExecutionModel {
+    /// Native machine code (x86/x64/ARM64) — FOX Native Pipeline applicable
+    Native,
+    /// .NET CLR managed assembly (IL code) — Native Pipeline NOT applicable
+    ManagedCLR,
+    /// Mixed mode (CLR + native, e.g. C++/CLI) — conservatively treated as unsupported
+    MixedMode,
+    /// Cannot determine execution model
+    Unknown,
+}
+
+impl ExecutionModel {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            ExecutionModel::Native => "Native",
+            ExecutionModel::ManagedCLR => "Managed (.NET CLR)",
+            ExecutionModel::MixedMode => "Mixed (CLR + Native)",
+            ExecutionModel::Unknown => "Unknown",
+        }
+    }
+
+    /// Whether the native analysis pipeline can process this binary.
+    pub fn native_pipeline_applicable(&self) -> bool {
+        matches!(self, ExecutionModel::Native)
+    }
+}
+
 impl BinaryFormat {
     pub fn display_name(&self) -> &'static str {
         match self {
@@ -42,6 +75,12 @@ impl BinaryFormat {
 pub struct Binary {
     pub format: BinaryFormat,
     pub architecture: Architecture,
+    /// P0-4.5: Execution model (Native / ManagedCLR / MixedMode / Unknown)
+    pub execution_model: ExecutionModel,
+    /// P0-4.5: Whether PE CLR/COM descriptor (Data Directory[14]) is present
+    pub clr_present: bool,
+    /// P0-4.5: Evidence trail explaining why execution_model was classified
+    pub reality_evidence: Vec<String>,
     pub entry_point: u64,
     pub image_base: u64,
     pub size: usize,

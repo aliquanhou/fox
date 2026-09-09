@@ -310,6 +310,9 @@ mod tests {
         let binary = fox_binary::Binary {
             format: fox_binary::BinaryFormat::PE32Plus,
             architecture: Architecture::X64,
+            execution_model: fox_binary::ExecutionModel::Native,
+            clr_present: false,
+            reality_evidence: vec![],
             entry_point: 0x1000,
             image_base: 0,
             size: code.len(),

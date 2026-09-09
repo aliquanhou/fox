@@ -1,10 +1,10 @@
-//! FOX P0-4.1 Pipeline Tests
+﻿//! FOX P0-4.1 Pipeline Tests
 //!
 //! Tests for the unified AnalysisPipeline:
 //! - Basic pipeline execution
 //! - FunctionAnalysisContext isolation (no cross-function contamination)
 //! - Pipeline determinism
-//! - Evidence chain (Instruction → IR → SSA/DataFlow → Evidence)
+//! - Evidence chain (Instruction 鈫?IR 鈫?SSA/DataFlow 鈫?Evidence)
 //! - SSA/DataFlow regression through pipeline
 //! - CLI equivalence (pipeline result == old CLI result)
 
@@ -26,11 +26,11 @@ fn load_test_binary(name: &str) -> Binary {
     Binary::load(data).expect("Failed to parse binary")
 }
 
-/// Test 1: Basic Pipeline — Binary → Function → CFG → IR → SSA → DataFlow success
+/// Test 1: Basic Pipeline 鈥?Binary 鈫?Function 鈫?CFG 鈫?IR 鈫?SSA 鈫?DataFlow success
 #[test]
 fn test_pipeline_basic_execution() {
     let binary = load_test_binary("01_linear_O0.exe");
-    let result = analyze_binary(&binary);
+    let result = analyze_binary(&binary).unwrap();
 
     // Pipeline must have run
     assert!(
@@ -79,11 +79,11 @@ fn test_pipeline_basic_execution() {
     assert!(!ctx.evidence.is_empty(), "Pipeline should produce evidence");
 }
 
-/// Test 2: Pipeline Isolation — Function A analysis does not contaminate Function B
+/// Test 2: Pipeline Isolation 鈥?Function A analysis does not contaminate Function B
 #[test]
 fn test_pipeline_isolation() {
     let binary = load_test_binary("02_if_else_O0.exe");
-    let result = analyze_binary(&binary);
+    let result = analyze_binary(&binary).unwrap();
 
     // Need at least 2 functions with full pipeline analysis (SSA + DataFlow)
     // (thunk functions with <=2 instructions may skip SSA/DataFlow)
@@ -128,13 +128,13 @@ fn test_pipeline_isolation() {
     }
 }
 
-/// Test 3: Pipeline Determinism — same binary, same results
+/// Test 3: Pipeline Determinism 鈥?same binary, same results
 #[test]
 fn test_pipeline_determinism() {
     let binary = load_test_binary("01_linear_O0.exe");
 
-    let result1 = analyze_binary(&binary);
-    let result2 = analyze_binary(&binary);
+    let result1 = analyze_binary(&binary).unwrap();
+    let result2 = analyze_binary(&binary).unwrap();
 
     // Same number of functions analyzed
     assert_eq!(
@@ -190,11 +190,11 @@ fn test_pipeline_determinism() {
     }
 }
 
-/// Test 4: Evidence Chain — Instruction → IR → SSA/DataFlow → Evidence
+/// Test 4: Evidence Chain 鈥?Instruction 鈫?IR 鈫?SSA/DataFlow 鈫?Evidence
 #[test]
 fn test_pipeline_evidence_chain() {
     let binary = load_test_binary("01_linear_O0.exe");
-    let result = analyze_binary(&binary);
+    let result = analyze_binary(&binary).unwrap();
 
     // Find a function with full pipeline analysis (SSA + DataFlow)
     // (thunk functions with <=2 instructions may skip SSA/DataFlow)
@@ -242,11 +242,11 @@ fn test_pipeline_evidence_chain() {
     );
 }
 
-/// Test 5: SSA Regression through pipeline — register SSA, FLAGS, Def-Use
+/// Test 5: SSA Regression through pipeline 鈥?register SSA, FLAGS, Def-Use
 #[test]
 fn test_pipeline_ssa_regression() {
     let binary = load_test_binary("04_loop_O0.exe");
-    let result = analyze_binary(&binary);
+    let result = analyze_binary(&binary).unwrap();
 
     // Find a function with loops (should have phi nodes)
     let ctx_with_phi = result.pipeline.function_analysis.values().find(|c| {
@@ -287,11 +287,11 @@ fn test_pipeline_ssa_regression() {
     }
 }
 
-/// Test 6: Memory Analysis Mounted — existing algorithm activated, no upgrade
+/// Test 6: Memory Analysis Mounted 鈥?existing algorithm activated, no upgrade
 #[test]
 fn test_pipeline_memory_mounted() {
     let binary = load_test_binary("09_function_pointer_O0.exe");
-    let result = analyze_binary(&binary);
+    let result = analyze_binary(&binary).unwrap();
 
     // Find a function with memory operations
     let ctx_with_mem = result.pipeline.function_analysis.values().find(|c| {
@@ -334,7 +334,7 @@ fn test_pipeline_memory_mounted() {
 #[test]
 fn test_pipeline_timing_recorded() {
     let binary = load_test_binary("01_linear_O0.exe");
-    let result = analyze_binary(&binary);
+    let result = analyze_binary(&binary).unwrap();
 
     // Total timing must be recorded
     assert!(
@@ -364,7 +364,7 @@ fn test_pipeline_timing_recorded() {
 #[test]
 fn test_confirmed_functions_have_pipeline() {
     let binary = load_test_binary("01_linear_O0.exe");
-    let result = analyze_binary(&binary);
+    let result = analyze_binary(&binary).unwrap();
 
     // Count confirmed functions
     let confirmed_count = result

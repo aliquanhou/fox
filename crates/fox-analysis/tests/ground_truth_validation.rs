@@ -1,4 +1,4 @@
-//! FOX Ground Truth Differential Validation (P0-3.1)
+﻿//! FOX Ground Truth Differential Validation (P0-3.1)
 //!
 //! Independent Ground Truth from MSVC linker .map files.
 //! Compares FOX Function Discovery against known function boundaries.
@@ -176,7 +176,7 @@ fn compare_boundaries(sample: &str) -> BoundaryResult {
 
     let binary_data = std::fs::read(&binary_path).expect("binary");
     let binary = fox_binary::Binary::load(binary_data).expect("parse binary");
-    let result = fox_analysis::analyze_binary(&binary);
+    let result = fox_analysis::analyze_binary(&binary).unwrap();
 
     // Build ground truth map: start_va -> function
     let mut gt_map: BTreeMap<u64, &GroundTruthFunction> = BTreeMap::new();

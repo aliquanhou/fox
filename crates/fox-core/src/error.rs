@@ -13,6 +13,9 @@ pub enum FoxError {
     #[error("Unsupported binary format: {0}")]
     UnsupportedBinaryFormat(String),
 
+    #[error("Unsupported execution model: {0}")]
+    UnsupportedExecutionModel(String),
+
     #[error("Parse error at offset 0x{offset:X}: {message}")]
     ParseError { offset: usize, message: String },
 

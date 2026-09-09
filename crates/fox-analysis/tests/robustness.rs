@@ -1,4 +1,4 @@
-//! FOX Robustness / Fuzz Tests
+﻿//! FOX Robustness / Fuzz Tests
 //!
 //! P0-1 requirement: Malformed PE must not panic/crash/out-of-bounds.
 //! Must return structured errors.
@@ -167,7 +167,7 @@ fn test_analysis_on_malformed_binary() {
     // Even if binary parses, analysis should not panic
     let data = minimal_pe_template();
     if let Ok(binary) = Binary::load(data) {
-        let result = fox_analysis::analyze_binary(&binary);
+        let result = fox_analysis::analyze_binary(&binary).unwrap();
         // Should produce some result, not panic
         let _ = result;
     }

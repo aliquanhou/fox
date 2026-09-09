@@ -183,6 +183,10 @@ fn cmd_info(file: &PathBuf, json: bool) -> Result<(), String> {
         let info = serde_json::json!({
             "format": binary.format.display_name(),
             "architecture": binary.architecture.display_name(),
+            "execution_model": binary.execution_model.display_name(),
+            "clr_present": binary.clr_present,
+            "native_analysis": binary.execution_model.native_pipeline_applicable(),
+            "reality_evidence": binary.reality_evidence,
             "entry_point": format!("0x{:016X}", binary.entry_point),
             "image_base": format!("0x{:016X}", binary.image_base),
             "size": binary.size,
@@ -202,9 +206,26 @@ fn cmd_info(file: &PathBuf, json: bool) -> Result<(), String> {
         println!("File:           {}", file.display());
         println!("Format:         {}", binary.format.display_name());
         println!("Architecture:   {}", binary.architecture);
+        println!("Execution Model: {}", binary.execution_model.display_name());
+        println!("CLR Present:    {}", binary.clr_present);
+        println!(
+            "Native Analysis: {}",
+            if binary.execution_model.native_pipeline_applicable() {
+                "applicable"
+            } else {
+                "NOT applicable"
+            }
+        );
         println!("Entry Point:    0x{:016X}", binary.entry_point);
         println!("Image Base:     0x{:016X}", binary.image_base);
         println!("File Size:      {} bytes", binary.size);
+        if !binary.reality_evidence.is_empty() {
+            println!();
+            println!("--- Reality Evidence ---");
+            for e in &binary.reality_evidence {
+                println!("  - {}", e);
+            }
+        }
         println!();
         println!("--- Sections ({}) ---", binary.sections.len());
         println!(
@@ -246,7 +267,7 @@ fn cmd_info(file: &PathBuf, json: bool) -> Result<(), String> {
 
 fn cmd_analyze(file: &PathBuf, json: bool) -> Result<(), String> {
     let binary = load_binary(file)?;
-    let result = analyze_binary(&binary);
+    let result = analyze_binary(&binary).map_err(|e| e.to_string())?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&result).unwrap());
@@ -297,7 +318,7 @@ fn cmd_analyze(file: &PathBuf, json: bool) -> Result<(), String> {
 
 fn cmd_functions(file: &PathBuf, json: bool) -> Result<(), String> {
     let binary = load_binary(file)?;
-    let result = fox_analysis::analyze_binary(&binary);
+    let result = fox_analysis::analyze_binary(&binary).map_err(|e| e.to_string())?;
     let functions = &result.functions;
 
     if json {
@@ -335,6 +356,16 @@ fn cmd_disasm(
     json: bool,
 ) -> Result<(), String> {
     let binary = load_binary(file)?;
+
+    // P0-4.5: Refuse disassembly for managed code (IL/metadata is not x86).
+    if !binary.execution_model.native_pipeline_applicable() {
+        return Err(format!(
+            "Refused: execution model is {} (CLR={}). Native disassembly not applicable.",
+            binary.execution_model.display_name(),
+            binary.clr_present
+        ));
+    }
+
     let disasm = fox_disasm::create_disassembler(binary.architecture)
         .map_err(|e| format!("Failed to create disassembler: {}", e))?;
 
@@ -402,7 +433,7 @@ fn cmd_disasm(
 
 fn cmd_blocks(file: &PathBuf, json: bool) -> Result<(), String> {
     let binary = load_binary(file)?;
-    let result = analyze_binary(&binary);
+    let result = analyze_binary(&binary).map_err(|e| e.to_string())?;
 
     if json {
         println!(
@@ -444,7 +475,7 @@ fn cmd_blocks(file: &PathBuf, json: bool) -> Result<(), String> {
 
 fn cmd_cfg(file: &PathBuf, dot: bool, json: bool) -> Result<(), String> {
     let binary = load_binary(file)?;
-    let result = analyze_binary(&binary);
+    let result = analyze_binary(&binary).map_err(|e| e.to_string())?;
 
     if dot {
         print!("{}", result.cfg.to_dot());
@@ -488,7 +519,7 @@ fn cmd_cfg(file: &PathBuf, dot: bool, json: bool) -> Result<(), String> {
 
 fn cmd_callgraph(file: &PathBuf, json: bool) -> Result<(), String> {
     let binary = load_binary(file)?;
-    let result = analyze_binary(&binary);
+    let result = analyze_binary(&binary).map_err(|e| e.to_string())?;
     let cg = &result.call_graph;
 
     if json {
@@ -593,7 +624,7 @@ fn cmd_ir(file: &PathBuf, address: Option<&str>, json: bool) -> Result<(), Strin
 
 fn cmd_evidence(file: &PathBuf, address: Option<&str>) -> Result<(), String> {
     let binary = load_binary(file)?;
-    let result = analyze_binary(&binary);
+    let result = analyze_binary(&binary).map_err(|e| e.to_string())?;
 
     if let Some(addr_str) = address {
         let addr = parse_hex_addr(addr_str)?;
@@ -735,7 +766,7 @@ fn cmd_strings(file: &PathBuf, min_length: usize, json: bool) -> Result<(), Stri
 
 fn cmd_calls(file: &PathBuf, json: bool) -> Result<(), String> {
     let binary = load_binary(file)?;
-    let result = fox_analysis::analyze_binary(&binary);
+    let result = fox_analysis::analyze_binary(&binary).map_err(|e| e.to_string())?;
 
     if json {
         let external: Vec<_> = result
@@ -809,7 +840,7 @@ fn collect_instructions(cfg: &fox_analysis::cfg::FunctionCfg) -> Vec<fox_disasm:
 
 fn cmd_dataflow(file: &PathBuf, address: Option<&str>, json: bool) -> Result<(), String> {
     let binary = load_binary(file)?;
-    let result = fox_analysis::analyze_binary(&binary);
+    let result = fox_analysis::analyze_binary(&binary).map_err(|e| e.to_string())?;
     let (func, _cfg) = select_function(&result, address).ok_or("No function found")?;
     let addr = func.address.0;
 
@@ -854,7 +885,7 @@ fn cmd_dataflow(file: &PathBuf, address: Option<&str>, json: bool) -> Result<(),
 
 fn cmd_dominators(file: &PathBuf, address: Option<&str>, json: bool) -> Result<(), String> {
     let binary = load_binary(file)?;
-    let result = fox_analysis::analyze_binary(&binary);
+    let result = fox_analysis::analyze_binary(&binary).map_err(|e| e.to_string())?;
     let (func, cfg) = select_function(&result, address).ok_or("No function found")?;
 
     let mut succ: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
@@ -897,7 +928,7 @@ fn cmd_dominators(file: &PathBuf, address: Option<&str>, json: bool) -> Result<(
 
 fn cmd_ssa(file: &PathBuf, address: Option<&str>, json: bool) -> Result<(), String> {
     let binary = load_binary(file)?;
-    let result = fox_analysis::analyze_binary(&binary);
+    let result = fox_analysis::analyze_binary(&binary).map_err(|e| e.to_string())?;
     let (func, _cfg) = select_function(&result, address).ok_or("No function found")?;
     let addr = func.address.0;
 
@@ -932,7 +963,7 @@ fn cmd_ssa(file: &PathBuf, address: Option<&str>, json: bool) -> Result<(), Stri
 
 fn cmd_types(file: &PathBuf, address: Option<&str>, json: bool) -> Result<(), String> {
     let binary = load_binary(file)?;
-    let result = fox_analysis::analyze_binary(&binary);
+    let result = fox_analysis::analyze_binary(&binary).map_err(|e| e.to_string())?;
     let (func, cfg) = select_function(&result, address).ok_or("No function found")?;
 
     let insts = collect_instructions(cfg);

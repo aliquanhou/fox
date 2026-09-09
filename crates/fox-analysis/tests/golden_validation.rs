@@ -1,4 +1,4 @@
-//! FOX Golden Validation Integration Tests (P0-3.C2/C3)
+﻿//! FOX Golden Validation Integration Tests (P0-3.C2/C3)
 //!
 //! Automated Differential Validation:
 //! Known Binary -> FOX Analysis -> Actual Fixture -> Compare with Expected -> PASS/FAIL
@@ -48,7 +48,7 @@ fn load_expected(name: &str) -> Option<ExpectedFixture> {
 }
 
 fn analyze_to_actual(name: &str, binary: &Binary) -> ActualFixture {
-    let result = fox_analysis::analyze_binary(binary);
+    let result = fox_analysis::analyze_binary(binary).unwrap();
     let function_count = result.functions.len();
     let function_names: Vec<String> = result
         .functions
