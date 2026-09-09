@@ -287,15 +287,18 @@ pub fn classify_memory(
 
 /// Analyze memory operations in an IR function.
 ///
-/// P0-4.2: This is the canonical entry point for memory semantic analysis.
-/// It replaces the old `mount_memory_analysis()` in the pipeline.
+/// P0-4.2 / P0-4.2R: Canonical entry point for memory semantic analysis.
 ///
 /// For each memory operand in each instruction:
 /// - Classify the MemoryLocation (Stack/Global/Heap/Unknown)
 /// - Determine MemoryOperationKind from structured OperandAccess (not string parsing)
-/// - Find destination_register (for Load) and source_register (for Store)
-///   from structured register operand access modes (not "first register" heuristic)
+/// - Determine destination/source registers based on OPCODE SEMANTICS +
+///   structured operand access modes (not "first register" heuristic)
 /// - Attach evidence linking to the original instruction
+///
+/// P0-4.2R fix: destination_register is only set when the opcode genuinely
+/// moves data from memory to a register (Mov/Pop/Load/Lea). For CMP/TEST,
+/// memory is read but the result goes to FLAGS — destination_register = None.
 pub fn analyze_function_memory(ir: &IRFunction) -> MemoryAnalysis {
     let mut analysis = MemoryAnalysis::new();
 
@@ -325,82 +328,42 @@ pub fn analyze_function_memory(ir: &IRFunction) -> MemoryAnalysis {
 
                     let kind = MemoryOperationKind::from_access(*access);
 
-                    // Determine destination/source registers from structured
-                    // operand access modes — NOT "first register operand" heuristic.
+                    // P0-4.2R: Determine data register roles based on OPCODE SEMANTICS,
+                    // not just "first register with matching access".
                     //
-                    // For Load (memory is Read): the destination is a register
-                    //   with access=Write in the same instruction.
-                    // For Store (memory is Write): the source is a register
-                    //   with access=Read in the same instruction.
-                    // For ReadWrite: both may exist.
-                    let (destination_register, source_register) = match kind {
+                    // source_register: explicit Register operand with access=Read
+                    //   (the register providing data to the operation)
+                    // destination_register: explicit Register operand with access=Write,
+                    //   BUT only if the opcode genuinely moves memory data TO a register.
+                    //   CMP/TEST read memory but result → FLAGS, so destination = None.
+                    //   ReadWrite (RMW) writes result to memory, so destination = None.
+                    let source_register = find_register_with_access(
+                        &inst.operands,
+                        OperandAccess::Read,
+                        true, // include ReadWrite
+                    );
+
+                    let destination_register = match kind {
                         MemoryOperationKind::Load => {
-                            let dest = inst.operands.iter().find_map(|o| {
-                                if let IROperand::Register {
-                                    name,
-                                    access: OperandAccess::Write | OperandAccess::ReadWrite,
-                                    ..
-                                } = o
-                                {
-                                    Some(name.clone())
-                                } else {
-                                    None
-                                }
-                            });
-                            (dest, None)
+                            if produces_register_destination(&inst.op) {
+                                find_register_with_access(
+                                    &inst.operands,
+                                    OperandAccess::Write,
+                                    true, // include ReadWrite
+                                )
+                            } else {
+                                // CMP/TEST/etc.: memory read but no register destination
+                                None
+                            }
                         }
-                        MemoryOperationKind::Store => {
-                            let src = inst.operands.iter().find_map(|o| {
-                                if let IROperand::Register {
-                                    name,
-                                    access: OperandAccess::Read | OperandAccess::ReadWrite,
-                                    ..
-                                } = o
-                                {
-                                    Some(name.clone())
-                                } else {
-                                    None
-                                }
-                            });
-                            (None, src)
-                        }
-                        MemoryOperationKind::ReadWrite => {
-                            let dest = inst.operands.iter().find_map(|o| {
-                                if let IROperand::Register {
-                                    name,
-                                    access: OperandAccess::Write | OperandAccess::ReadWrite,
-                                    ..
-                                } = o
-                                {
-                                    Some(name.clone())
-                                } else {
-                                    None
-                                }
-                            });
-                            let src = inst.operands.iter().find_map(|o| {
-                                if let IROperand::Register {
-                                    name,
-                                    access: OperandAccess::Read | OperandAccess::ReadWrite,
-                                    ..
-                                } = o
-                                {
-                                    Some(name.clone())
-                                } else {
-                                    None
-                                }
-                            });
-                            (dest, src)
-                        }
-                        MemoryOperationKind::Unknown => (None, None),
+                        MemoryOperationKind::Store => None,
+                        MemoryOperationKind::ReadWrite => None, // result → memory
+                        MemoryOperationKind::Unknown => None,
                     };
 
                     let evidence_detail = format!(
-                        "instr=0x{:x} op={} operand_idx={} access={:?} location={:?}",
-                        inst.address.0,
-                        inst.original_mnemonic.as_deref().unwrap_or("?"),
-                        op_idx,
-                        access,
-                        location
+                        "instr=0x{:x} op={:?} operand_idx={} access={:?} kind={:?} location={:?}",
+                        inst.address.0, inst.op, op_idx, access, kind, location
                     );
 
                     analysis.add_operation(MemoryOperation {
@@ -417,6 +380,48 @@ pub fn analyze_function_memory(ir: &IRFunction) -> MemoryAnalysis {
     }
 
     analysis
+}
+
+/// Returns true if this opcode, when reading from memory, produces a register
+/// data destination (i.e., memory value is loaded INTO a register).
+///
+/// CMP/TEST read memory but the result goes to FLAGS, not a register.
+/// RMW instructions (ADD/SUB/AND/...) with memory operands are ReadWrite,
+/// not Load, so they are not relevant here.
+fn produces_register_destination(op: &crate::IROp) -> bool {
+    use crate::IROp;
+    match op {
+        // Genuine memory-to-register data movement
+        IROp::Mov | IROp::Load | IROp::Pop | IROp::Lea => true,
+        // Everything else: no register data destination from a memory Load
+        // (Cmp/Test → FLAGS; Push/Call/Jump → memory is source but not to a register)
+        _ => false,
+    }
+}
+
+/// Find the first explicit Register operand with the given access mode.
+///
+/// `include_read_write` controls whether ReadWrite registers match.
+/// Only matches `IROperand::Register` — NOT `IROperand::Flags` (FLAGS is never
+/// a memory data destination/source).
+fn find_register_with_access(
+    operands: &[IROperand],
+    target: OperandAccess,
+    include_read_write: bool,
+) -> Option<String> {
+    operands.iter().find_map(|o| {
+        if let IROperand::Register { name, access, .. } = o {
+            let matches =
+                *access == target || (include_read_write && *access == OperandAccess::ReadWrite);
+            if matches {
+                Some(name.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    })
 }
 
 #[cfg(test)]
@@ -1001,5 +1006,330 @@ mod tests {
         assert_eq!(analysis.stack_slots.len(), 2);
         assert!(analysis.stack_slots.contains(&("RSP".to_string(), -0x20)));
         assert!(analysis.stack_slots.contains(&("RBP".to_string(), -0x18)));
+    }
+
+    // ============================================================
+    // P0-4.2R: Memory Data-Register Role Correctness Tests
+    // ============================================================
+
+    /// R1: cmp [rsp+8], rax — memory is Read (Load kind) but result goes to FLAGS.
+    /// destination_register MUST be None. source_register = RAX (comparison operand).
+    #[test]
+    fn test_cmp_memory_register_does_not_create_destination() {
+        let ir = make_function(vec![inst(
+            0x140002000,
+            IROp::Cmp,
+            vec![
+                mem(Some("RSP"), None, 1, 8, 8, OperandAccess::Read, false, None),
+                reg("RAX", OperandAccess::Read),
+                IROperand::Flags {
+                    access: OperandAccess::Write,
+                },
+            ],
+            "cmp",
+        )]);
+
+        let analysis = analyze_function_memory(&ir);
+        assert_eq!(analysis.operations.len(), 1);
+
+        let op = &analysis.operations[0];
+        assert_eq!(op.kind, MemoryOperationKind::Load);
+        // CRITICAL: CMP does not produce a register destination
+        assert_eq!(
+            op.destination_register, None,
+            "CMP must not create a memory data destination register"
+        );
+        // RAX is the comparison source
+        assert_eq!(op.source_register, Some("RAX".into()));
+    }
+
+    /// R2: test [rsp+8], rax — same as CMP, result goes to FLAGS.
+    #[test]
+    fn test_test_memory_register_does_not_create_destination() {
+        let ir = make_function(vec![inst(
+            0x140002005,
+            IROp::Test,
+            vec![
+                mem(Some("RSP"), None, 1, 8, 8, OperandAccess::Read, false, None),
+                reg("RCX", OperandAccess::Read),
+                IROperand::Flags {
+                    access: OperandAccess::Write,
+                },
+            ],
+            "test",
+        )]);
+
+        let analysis = analyze_function_memory(&ir);
+        let op = &analysis.operations[0];
+        assert_eq!(op.kind, MemoryOperationKind::Load);
+        assert_eq!(
+            op.destination_register, None,
+            "TEST must not create a memory data destination register"
+        );
+        assert_eq!(op.source_register, Some("RCX".into()));
+    }
+
+    /// R3: mov rcx, [rsp+8] — genuine Load, destination = RCX.
+    #[test]
+    fn test_mov_memory_load_destination() {
+        let ir = make_function(vec![inst(
+            0x140002010,
+            IROp::Mov,
+            vec![
+                reg("RCX", OperandAccess::Write),
+                mem(Some("RSP"), None, 1, 8, 8, OperandAccess::Read, false, None),
+            ],
+            "mov",
+        )]);
+
+        let analysis = analyze_function_memory(&ir);
+        let op = &analysis.operations[0];
+        assert_eq!(op.kind, MemoryOperationKind::Load);
+        assert_eq!(op.destination_register, Some("RCX".into()));
+        assert_eq!(op.source_register, None); // no register is read
+    }
+
+    /// R4: mov [rsp+8], rax — genuine Store, source = RAX.
+    #[test]
+    fn test_mov_memory_store_source() {
+        let ir = make_function(vec![inst(
+            0x140002015,
+            IROp::Mov,
+            vec![
+                mem(
+                    Some("RSP"),
+                    None,
+                    1,
+                    8,
+                    8,
+                    OperandAccess::Write,
+                    false,
+                    None,
+                ),
+                reg("RAX", OperandAccess::Read),
+            ],
+            "mov",
+        )]);
+
+        let analysis = analyze_function_memory(&ir);
+        let op = &analysis.operations[0];
+        assert_eq!(op.kind, MemoryOperationKind::Store);
+        assert_eq!(op.destination_register, None);
+        assert_eq!(op.source_register, Some("RAX".into()));
+    }
+
+    /// R5: add [rsp+8], rax — ReadWrite (RMW). Result goes to memory, not register.
+    /// destination = None, source = RAX.
+    #[test]
+    fn test_readwrite_register_roles() {
+        let ir = make_function(vec![inst(
+            0x140002020,
+            IROp::Add,
+            vec![
+                mem(
+                    Some("RSP"),
+                    None,
+                    1,
+                    8,
+                    8,
+                    OperandAccess::ReadWrite,
+                    false,
+                    None,
+                ),
+                reg("RAX", OperandAccess::Read),
+                IROperand::Flags {
+                    access: OperandAccess::Write,
+                },
+            ],
+            "add",
+        )]);
+
+        let analysis = analyze_function_memory(&ir);
+        let op = &analysis.operations[0];
+        assert_eq!(op.kind, MemoryOperationKind::ReadWrite);
+        // RMW: result goes to memory, NOT a register
+        assert_eq!(
+            op.destination_register, None,
+            "RMW instruction must not create a register destination"
+        );
+        assert_eq!(op.source_register, Some("RAX".into()));
+    }
+
+    /// R6: FLAGS is never matched as destination/source (it's IROperand::Flags,
+    /// not IROperand::Register). This test verifies the variant distinction holds.
+    #[test]
+    fn test_flags_never_matched_as_data_register() {
+        // cmp [mem], rax — FLAGS is Write but must not appear as destination
+        let ir = make_function(vec![inst(
+            0x140002025,
+            IROp::Cmp,
+            vec![
+                mem(Some("RSP"), None, 1, 8, 8, OperandAccess::Read, false, None),
+                reg("RDX", OperandAccess::Read),
+                IROperand::Flags {
+                    access: OperandAccess::Write,
+                },
+            ],
+            "cmp",
+        )]);
+
+        let analysis = analyze_function_memory(&ir);
+        let op = &analysis.operations[0];
+        assert_ne!(op.destination_register, Some("FLAGS".into()));
+        assert_ne!(op.source_register, Some("FLAGS".into()));
+        assert_eq!(op.destination_register, None);
+        assert_eq!(op.source_register, Some("RDX".into()));
+    }
+
+    /// R7: pop rax — Load from stack, Pop opcode produces register destination.
+    #[test]
+    fn test_pop_produces_destination() {
+        let ir = make_function(vec![inst(
+            0x140002030,
+            IROp::Pop,
+            vec![
+                reg("RAX", OperandAccess::Write),
+                mem(Some("RSP"), None, 1, 0, 8, OperandAccess::Read, false, None),
+            ],
+            "pop",
+        )]);
+
+        let analysis = analyze_function_memory(&ir);
+        let op = &analysis.operations[0];
+        assert_eq!(op.kind, MemoryOperationKind::Load);
+        assert_eq!(op.destination_register, Some("RAX".into()));
+    }
+
+    /// R8: Comprehensive instruction matrix — verify all roles at once.
+    #[test]
+    fn test_instruction_role_matrix() {
+        let ir = make_function(vec![
+            // mov rcx, [rsp+8] → Load, dest=RCX, src=None
+            inst(
+                0x3000,
+                IROp::Mov,
+                vec![
+                    reg("RCX", OperandAccess::Write),
+                    mem(Some("RSP"), None, 1, 8, 8, OperandAccess::Read, false, None),
+                ],
+                "mov",
+            ),
+            // mov [rsp+16], rdx → Store, dest=None, src=RDX
+            inst(
+                0x3005,
+                IROp::Mov,
+                vec![
+                    mem(
+                        Some("RSP"),
+                        None,
+                        1,
+                        16,
+                        8,
+                        OperandAccess::Write,
+                        false,
+                        None,
+                    ),
+                    reg("RDX", OperandAccess::Read),
+                ],
+                "mov",
+            ),
+            // cmp [rsp+24], r8 → Load, dest=None, src=R8
+            inst(
+                0x300a,
+                IROp::Cmp,
+                vec![
+                    mem(
+                        Some("RSP"),
+                        None,
+                        1,
+                        24,
+                        8,
+                        OperandAccess::Read,
+                        false,
+                        None,
+                    ),
+                    reg("R8", OperandAccess::Read),
+                    IROperand::Flags {
+                        access: OperandAccess::Write,
+                    },
+                ],
+                "cmp",
+            ),
+            // test [rsp+32], r9 → Load, dest=None, src=R9
+            inst(
+                0x300f,
+                IROp::Test,
+                vec![
+                    mem(
+                        Some("RSP"),
+                        None,
+                        1,
+                        32,
+                        8,
+                        OperandAccess::Read,
+                        false,
+                        None,
+                    ),
+                    reg("R9", OperandAccess::Read),
+                    IROperand::Flags {
+                        access: OperandAccess::Write,
+                    },
+                ],
+                "test",
+            ),
+            // add [rsp+40], r10 → ReadWrite, dest=None, src=R10
+            inst(
+                0x3014,
+                IROp::Add,
+                vec![
+                    mem(
+                        Some("RSP"),
+                        None,
+                        1,
+                        40,
+                        8,
+                        OperandAccess::ReadWrite,
+                        false,
+                        None,
+                    ),
+                    reg("R10", OperandAccess::Read),
+                    IROperand::Flags {
+                        access: OperandAccess::Write,
+                    },
+                ],
+                "add",
+            ),
+        ]);
+
+        let analysis = analyze_function_memory(&ir);
+        assert_eq!(analysis.operations.len(), 5);
+
+        // mov rcx, [rsp+8]
+        assert_eq!(analysis.operations[0].kind, MemoryOperationKind::Load);
+        assert_eq!(
+            analysis.operations[0].destination_register,
+            Some("RCX".into())
+        );
+        assert_eq!(analysis.operations[0].source_register, None);
+
+        // mov [rsp+16], rdx
+        assert_eq!(analysis.operations[1].kind, MemoryOperationKind::Store);
+        assert_eq!(analysis.operations[1].destination_register, None);
+        assert_eq!(analysis.operations[1].source_register, Some("RDX".into()));
+
+        // cmp [rsp+24], r8
+        assert_eq!(analysis.operations[2].kind, MemoryOperationKind::Load);
+        assert_eq!(analysis.operations[2].destination_register, None);
+        assert_eq!(analysis.operations[2].source_register, Some("R8".into()));
+
+        // test [rsp+32], r9
+        assert_eq!(analysis.operations[3].kind, MemoryOperationKind::Load);
+        assert_eq!(analysis.operations[3].destination_register, None);
+        assert_eq!(analysis.operations[3].source_register, Some("R9".into()));
+
+        // add [rsp+40], r10
+        assert_eq!(analysis.operations[4].kind, MemoryOperationKind::ReadWrite);
+        assert_eq!(analysis.operations[4].destination_register, None);
+        assert_eq!(analysis.operations[4].source_register, Some("R10".into()));
     }
 }
