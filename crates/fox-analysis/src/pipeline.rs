@@ -22,6 +22,7 @@ use crate::cfg::{ControlFlowGraph, FunctionCfg};
 use crate::dataflow::CfgDataFlowResult;
 use crate::memory_ssa::MemorySSAFunction;
 use crate::ssa::SSAFunction;
+use crate::value_flow::CrossDomainValueFlow;
 use crate::{Function, FunctionConfidence};
 
 /// Per-function unified analysis context.
@@ -54,6 +55,9 @@ pub struct FunctionAnalysisContext {
     /// Memory SSA (P0-4.3: MemoryDef/MemoryUse/MemoryPhi/MemoryVersion/use-def)
     pub memory_ssa: Option<MemorySSAFunction>,
 
+    /// Cross-domain value flow (P0-4.4: Register↔Memory bridge, alias, FP propagation)
+    pub value_flow: Option<CrossDomainValueFlow>,
+
     /// Evidence collected during pipeline execution
     pub evidence: Vec<Evidence>,
 
@@ -69,6 +73,7 @@ pub struct PipelineTiming {
     pub dataflow_ms: u128,
     pub memory_analysis_ms: u128,
     pub memory_ssa_ms: u128,
+    pub value_flow_ms: u128,
     pub total_ms: u128,
 }
 
@@ -200,6 +205,7 @@ impl AnalysisPipeline {
                 dataflow: None,
                 memory,
                 memory_ssa: None,
+                value_flow: None,
                 evidence,
                 timing: PipelineTiming {
                     ir_generation_ms: ir_ms,
@@ -207,6 +213,7 @@ impl AnalysisPipeline {
                     dataflow_ms: 0,
                     memory_analysis_ms: 0,
                     memory_ssa_ms: 0,
+                    value_flow_ms: 0,
                     total_ms: func_start.elapsed().as_millis(),
                 },
             };
@@ -277,6 +284,29 @@ impl AnalysisPipeline {
             );
         }
 
+        // === Phase 8: Cross-domain Value Flow (P0-4.4: Register↔Memory bridge) ===
+        let vf_start = Instant::now();
+        let value_flow = match (&ssa, &memory_ssa) {
+            (Some(ref s), Some(ref ms)) => Some(CrossDomainValueFlow::build(&ir, s, Some(ms))),
+            (Some(ref s), None) => Some(CrossDomainValueFlow::build(&ir, s, None)),
+            _ => None,
+        };
+        let vf_ms = vf_start.elapsed().as_millis();
+
+        if let Some(ref vf) = value_flow {
+            evidence.push(
+                Evidence::new(EvidenceKind::DataFlowAnalysis)
+                    .with_address(func.value.address.0)
+                    .with_weight(0.88)
+                    .with_detail(format!(
+                        "ValueFlow: {} reg→mem, {} mem→reg, {} FP candidates",
+                        vf.register_to_memory.len(),
+                        vf.memory_to_register.len(),
+                        vf.function_pointer_candidates.len()
+                    )),
+            );
+        }
+
         // === Collect flat instructions (for CLI compatibility) ===
         let instructions: Vec<fox_disasm::Instruction> = func_cfg
             .blocks
@@ -296,6 +326,7 @@ impl AnalysisPipeline {
             dataflow,
             memory,
             memory_ssa,
+            value_flow,
             evidence,
             timing: PipelineTiming {
                 ir_generation_ms: ir_ms,
@@ -303,6 +334,7 @@ impl AnalysisPipeline {
                 dataflow_ms: df_ms,
                 memory_analysis_ms: mem_ms,
                 memory_ssa_ms: mssa_ms,
+                value_flow_ms: vf_ms,
                 total_ms,
             },
         }

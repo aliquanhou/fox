@@ -20,6 +20,7 @@ pub mod pipeline;
 pub mod ssa;
 pub mod symbol;
 pub mod type_recovery;
+pub mod value_flow;
 
 use fox_binary::Binary;
 use fox_core::{Address, Confidence, Evidence, EvidenceKind, WithEvidence};
