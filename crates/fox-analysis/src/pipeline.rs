@@ -20,6 +20,7 @@ use std::time::Instant;
 
 use crate::cfg::{ControlFlowGraph, FunctionCfg};
 use crate::dataflow::CfgDataFlowResult;
+use crate::memory_ssa::MemorySSAFunction;
 use crate::ssa::SSAFunction;
 use crate::{Function, FunctionConfidence};
 
@@ -50,6 +51,9 @@ pub struct FunctionAnalysisContext {
     /// Memory analysis (P0-4.2: semantic normalization via analyze_function_memory)
     pub memory: Option<fox_ir::memory::MemoryAnalysis>,
 
+    /// Memory SSA (P0-4.3: MemoryDef/MemoryUse/MemoryPhi/MemoryVersion/use-def)
+    pub memory_ssa: Option<MemorySSAFunction>,
+
     /// Evidence collected during pipeline execution
     pub evidence: Vec<Evidence>,
 
@@ -64,6 +68,7 @@ pub struct PipelineTiming {
     pub ssa_construction_ms: u128,
     pub dataflow_ms: u128,
     pub memory_analysis_ms: u128,
+    pub memory_ssa_ms: u128,
     pub total_ms: u128,
 }
 
@@ -194,12 +199,14 @@ impl AnalysisPipeline {
                 ssa: None,
                 dataflow: None,
                 memory,
+                memory_ssa: None,
                 evidence,
                 timing: PipelineTiming {
                     ir_generation_ms: ir_ms,
                     ssa_construction_ms: 0,
                     dataflow_ms: 0,
                     memory_analysis_ms: 0,
+                    memory_ssa_ms: 0,
                     total_ms: func_start.elapsed().as_millis(),
                 },
             };
@@ -248,6 +255,28 @@ impl AnalysisPipeline {
         let memory = Some(fox_ir::memory::analyze_function_memory(&ir));
         let mem_ms = mem_start.elapsed().as_millis();
 
+        // === Phase 7: Memory SSA (P0-4.3: MemoryDef/MemoryUse/MemoryPhi/use-def) ===
+        let mssa_start = Instant::now();
+        let memory_ssa = memory
+            .as_ref()
+            .and_then(|m| crate::memory_ssa::MemorySSAConstructor::construct(&ir, m));
+        let mssa_ms = mssa_start.elapsed().as_millis();
+
+        if let Some(ref ms) = memory_ssa {
+            evidence.push(
+                Evidence::new(EvidenceKind::DataFlowAnalysis)
+                    .with_address(func.value.address.0)
+                    .with_weight(0.9)
+                    .with_detail(format!(
+                        "Memory SSA: {} vars, {} phi, {} defs, {} uses",
+                        ms.memory_variables.len(),
+                        ms.phi_nodes.len(),
+                        ms.definitions.len(),
+                        ms.uses.len()
+                    )),
+            );
+        }
+
         // === Collect flat instructions (for CLI compatibility) ===
         let instructions: Vec<fox_disasm::Instruction> = func_cfg
             .blocks
@@ -266,12 +295,14 @@ impl AnalysisPipeline {
             ssa,
             dataflow,
             memory,
+            memory_ssa,
             evidence,
             timing: PipelineTiming {
                 ir_generation_ms: ir_ms,
                 ssa_construction_ms: ssa_ms,
                 dataflow_ms: df_ms,
                 memory_analysis_ms: mem_ms,
+                memory_ssa_ms: mssa_ms,
                 total_ms,
             },
         }

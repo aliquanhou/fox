@@ -15,6 +15,7 @@ pub mod dataflow;
 pub mod dominators;
 pub mod golden;
 pub mod jump_table;
+pub mod memory_ssa;
 pub mod pipeline;
 pub mod ssa;
 pub mod symbol;
