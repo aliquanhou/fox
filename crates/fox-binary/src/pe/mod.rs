@@ -163,7 +163,8 @@ impl PE {
         }
 
         let execution_model = if clr_present {
-            reality_evidence.push("Classification: ManagedCLR (CLR header is canonical indicator)".into());
+            reality_evidence
+                .push("Classification: ManagedCLR (CLR header is canonical indicator)".into());
             ExecutionModel::ManagedCLR
         } else {
             reality_evidence.push("Classification: Native (no CLR header)".into());
