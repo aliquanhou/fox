@@ -62,9 +62,9 @@ pub fn classify_alias(a: &MemoryVariable, b: &MemoryVariable) -> AliasClass {
         ) => {
             if ba == bb && da == db {
                 AliasClass::MustAlias
-            } else if da.abs_diff(*db) > 256 {
-                AliasClass::NoAlias
             } else {
+                // Conservative: cannot prove different stack slots are non-overlapping
+                // (e.g., RSP+8 vs RBP-8 after frame setup may alias). Always MayAlias.
                 AliasClass::MayAlias
             }
         }
@@ -219,10 +219,6 @@ impl CrossDomainValueFlow {
             for mem_def in &mem_ssa.definitions {
                 let key = (mem_def.block_id, mem_def.inst_index);
                 let ssa_inst = match ssa_inst_lookup.get(&key) {
-                    Some(i) => *i,
-                    None => continue,
-                };
-                let _ir_inst = match ir_inst_lookup.get(&key) {
                     Some(i) => *i,
                     None => continue,
                 };
@@ -710,8 +706,9 @@ mod tests {
     }
 
     // Test 2: Alias classification 鈥?different stack slots = NoAlias (far apart)
+    // Test 2: Alias classification — different stack slots = MayAlias (conservative, cannot prove non-overlap)
     #[test]
-    fn test_alias_no_alias_different_stack() {
+    fn test_alias_different_stack_conservative() {
         let a = MemoryVariable::Stack {
             base: "RSP".into(),
             displacement: 8,
@@ -720,7 +717,7 @@ mod tests {
             base: "RSP".into(),
             displacement: 512,
         };
-        assert_eq!(classify_alias(&a, &b), AliasClass::NoAlias);
+        assert_eq!(classify_alias(&a, &b), AliasClass::MayAlias);
     }
 
     // Test 3: Alias classification 鈥?heap = MayAlias
