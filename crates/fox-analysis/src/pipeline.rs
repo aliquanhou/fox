@@ -47,7 +47,7 @@ pub struct FunctionAnalysisContext {
     /// CFG-aware register DataFlow (existing algorithm, no changes)
     pub dataflow: Option<CfgDataFlowResult>,
 
-    /// Memory analysis (existing MemoryAnalysis mounted as-is, P0-4.2 will activate)
+    /// Memory analysis (P0-4.2: semantic normalization via analyze_function_memory)
     pub memory: Option<fox_ir::memory::MemoryAnalysis>,
 
     /// Evidence collected during pipeline execution
@@ -170,7 +170,7 @@ impl AnalysisPipeline {
         let total_instructions: usize = ir.basic_blocks.iter().map(|b| b.instructions.len()).sum();
 
         if total_instructions <= 2 {
-            let memory = Some(Self::mount_memory_analysis(&ir));
+            let memory = Some(fox_ir::memory::analyze_function_memory(&ir));
             let instructions: Vec<fox_disasm::Instruction> = func_cfg
                 .blocks
                 .iter()
@@ -243,9 +243,9 @@ impl AnalysisPipeline {
             );
         }
 
-        // === Phase 6: Memory Analysis mount (existing algorithm, NO upgrade) ===
+        // === Phase 6: Memory semantic analysis (P0-4.2: analyze_function_memory) ===
         let mem_start = Instant::now();
-        let memory = Some(Self::mount_memory_analysis(&ir));
+        let memory = Some(fox_ir::memory::analyze_function_memory(&ir));
         let mem_ms = mem_start.elapsed().as_millis();
 
         // === Collect flat instructions (for CLI compatibility) ===
@@ -340,72 +340,6 @@ impl AnalysisPipeline {
             .collect();
 
         CfgDataFlowResult::analyze(function_address, &block_refs, func_cfg.entry_block)
-    }
-
-    /// Mount existing MemoryAnalysis (P0-4.1: no algorithm upgrade, just activation).
-    ///
-    /// This calls the existing classify_memory() on each memory operand.
-    /// P0-4.2 will add Memory SSA; P0-4.1 only ensures the pipeline can call it.
-    fn mount_memory_analysis(ir: &IRFunction) -> fox_ir::memory::MemoryAnalysis {
-        use fox_ir::memory::{classify_memory, MemoryAnalysis, MemoryOperation};
-
-        let mut analysis = MemoryAnalysis::new();
-
-        for block in &ir.basic_blocks {
-            for inst in &block.instructions {
-                for op in &inst.operands {
-                    if let fox_ir::IROperand::Memory {
-                        base,
-                        index,
-                        scale,
-                        displacement,
-                        size,
-                        access,
-                        is_rip_relative,
-                        effective_address,
-                    } = op
-                    {
-                        let location = classify_memory(
-                            base.as_deref(),
-                            index.as_deref(),
-                            *scale as u32,
-                            *displacement,
-                            *size as u32,
-                            *is_rip_relative,
-                            *effective_address,
-                        );
-
-                        let is_load = matches!(
-                            access,
-                            fox_ir::OperandAccess::Read | fox_ir::OperandAccess::ReadWrite
-                        );
-                        let is_store = matches!(
-                            access,
-                            fox_ir::OperandAccess::Write | fox_ir::OperandAccess::ReadWrite
-                        );
-
-                        // Find the data register (first non-memory operand)
-                        let data_register = inst.operands.iter().find_map(|o| {
-                            if let fox_ir::IROperand::Register { name, .. } = o {
-                                Some(name.clone())
-                            } else {
-                                None
-                            }
-                        });
-
-                        analysis.add_operation(MemoryOperation {
-                            address: inst.address.0,
-                            is_load,
-                            is_store,
-                            location,
-                            data_register,
-                        });
-                    }
-                }
-            }
-        }
-
-        analysis
     }
 }
 

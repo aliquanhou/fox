@@ -1,4 +1,4 @@
-//! FOX Memory Semantics (P0-3.4)
+//! FOX Memory Semantics (P0-3.4 / P0-4.2)
 //!
 //! Memory Location abstraction:
 //! - Stack slot (based on RSP/RBP offset)
@@ -6,8 +6,13 @@
 //! - Heap / unknown pointer
 //! - Alias candidates
 //!
-//! This prepares for Memory SSA (P0-3.7) and Alias Analysis.
+//! P0-4.2: MemoryOperation upgraded from boolean flags to semantic enum
+//! (Load/Store/ReadWrite/Unknown). destination_register and source_register
+//! are derived from structured IR operand access modes, not heuristics.
+//!
+//! This prepares for Memory SSA (P0-4.3) and Alias Analysis.
 
+use crate::{IRFunction, IROperand, OperandAccess};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -103,14 +108,66 @@ impl MemoryLocation {
     }
 }
 
-/// A memory operation (load or store).
+/// The kind of memory operation — a reliable semantic object, not boolean flags.
+///
+/// P0-4.2: Derived from structured IR OperandAccess, never from string parsing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum MemoryOperationKind {
+    /// Read from memory (e.g. mov rcx, [rsp+8])
+    Load,
+    /// Write to memory (e.g. mov [rsp+8], rax)
+    Store,
+    /// Both read and write (e.g. xchg [mem], reg, lock add [mem], imm)
+    ReadWrite,
+    /// Cannot determine access mode from structured IR
+    Unknown,
+}
+
+impl MemoryOperationKind {
+    pub fn is_load(&self) -> bool {
+        matches!(
+            self,
+            MemoryOperationKind::Load | MemoryOperationKind::ReadWrite
+        )
+    }
+
+    pub fn is_store(&self) -> bool {
+        matches!(
+            self,
+            MemoryOperationKind::Store | MemoryOperationKind::ReadWrite
+        )
+    }
+
+    pub fn from_access(access: OperandAccess) -> Self {
+        match access {
+            OperandAccess::Read => MemoryOperationKind::Load,
+            OperandAccess::Write => MemoryOperationKind::Store,
+            OperandAccess::ReadWrite => MemoryOperationKind::ReadWrite,
+        }
+    }
+}
+
+/// A memory operation with full semantic information.
+///
+/// P0-4.2: Replaces boolean is_load/is_store with kind: MemoryOperationKind.
+/// destination_register / source_register are derived from structured IR
+/// operand access modes, not "first register operand" heuristics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryOperation {
-    pub address: u64,
-    pub is_load: bool,
-    pub is_store: bool,
+    /// Address of the machine instruction producing this operation
+    pub instruction_address: u64,
+    /// Semantic operation kind
+    pub kind: MemoryOperationKind,
+    /// Classified memory location
     pub location: MemoryLocation,
-    pub data_register: Option<String>,
+    /// For Load: the register receiving the value (operand with access=Write)
+    /// For Store: None (the value comes from source_register)
+    pub destination_register: Option<String>,
+    /// For Store: the register providing the value (operand with access=Read)
+    /// For Load: None (the value goes to destination_register)
+    pub source_register: Option<String>,
+    /// Human-readable evidence detail linking to the original instruction
+    pub evidence_detail: String,
 }
 
 /// Memory analysis result for a function.
@@ -152,11 +209,16 @@ impl MemoryAnalysis {
     }
 
     pub fn load_count(&self) -> usize {
-        self.operations.iter().filter(|o| o.is_load).count()
+        self.operations.iter().filter(|o| o.kind.is_load()).count()
     }
 
     pub fn store_count(&self) -> usize {
-        self.operations.iter().filter(|o| o.is_store).count()
+        self.operations.iter().filter(|o| o.kind.is_store()).count()
+    }
+
+    /// Count operations by kind.
+    pub fn count_by_kind(&self, kind: MemoryOperationKind) -> usize {
+        self.operations.iter().filter(|o| o.kind == kind).count()
     }
 }
 
@@ -221,6 +283,140 @@ pub fn classify_memory(
         displacement,
         size,
     }
+}
+
+/// Analyze memory operations in an IR function.
+///
+/// P0-4.2: This is the canonical entry point for memory semantic analysis.
+/// It replaces the old `mount_memory_analysis()` in the pipeline.
+///
+/// For each memory operand in each instruction:
+/// - Classify the MemoryLocation (Stack/Global/Heap/Unknown)
+/// - Determine MemoryOperationKind from structured OperandAccess (not string parsing)
+/// - Find destination_register (for Load) and source_register (for Store)
+///   from structured register operand access modes (not "first register" heuristic)
+/// - Attach evidence linking to the original instruction
+pub fn analyze_function_memory(ir: &IRFunction) -> MemoryAnalysis {
+    let mut analysis = MemoryAnalysis::new();
+
+    for block in &ir.basic_blocks {
+        for inst in &block.instructions {
+            for (op_idx, op) in inst.operands.iter().enumerate() {
+                if let IROperand::Memory {
+                    base,
+                    index,
+                    scale,
+                    displacement,
+                    size,
+                    access,
+                    is_rip_relative,
+                    effective_address,
+                } = op
+                {
+                    let location = classify_memory(
+                        base.as_deref(),
+                        index.as_deref(),
+                        *scale as u32,
+                        *displacement,
+                        *size as u32,
+                        *is_rip_relative,
+                        *effective_address,
+                    );
+
+                    let kind = MemoryOperationKind::from_access(*access);
+
+                    // Determine destination/source registers from structured
+                    // operand access modes — NOT "first register operand" heuristic.
+                    //
+                    // For Load (memory is Read): the destination is a register
+                    //   with access=Write in the same instruction.
+                    // For Store (memory is Write): the source is a register
+                    //   with access=Read in the same instruction.
+                    // For ReadWrite: both may exist.
+                    let (destination_register, source_register) = match kind {
+                        MemoryOperationKind::Load => {
+                            let dest = inst.operands.iter().find_map(|o| {
+                                if let IROperand::Register {
+                                    name,
+                                    access: OperandAccess::Write | OperandAccess::ReadWrite,
+                                    ..
+                                } = o
+                                {
+                                    Some(name.clone())
+                                } else {
+                                    None
+                                }
+                            });
+                            (dest, None)
+                        }
+                        MemoryOperationKind::Store => {
+                            let src = inst.operands.iter().find_map(|o| {
+                                if let IROperand::Register {
+                                    name,
+                                    access: OperandAccess::Read | OperandAccess::ReadWrite,
+                                    ..
+                                } = o
+                                {
+                                    Some(name.clone())
+                                } else {
+                                    None
+                                }
+                            });
+                            (None, src)
+                        }
+                        MemoryOperationKind::ReadWrite => {
+                            let dest = inst.operands.iter().find_map(|o| {
+                                if let IROperand::Register {
+                                    name,
+                                    access: OperandAccess::Write | OperandAccess::ReadWrite,
+                                    ..
+                                } = o
+                                {
+                                    Some(name.clone())
+                                } else {
+                                    None
+                                }
+                            });
+                            let src = inst.operands.iter().find_map(|o| {
+                                if let IROperand::Register {
+                                    name,
+                                    access: OperandAccess::Read | OperandAccess::ReadWrite,
+                                    ..
+                                } = o
+                                {
+                                    Some(name.clone())
+                                } else {
+                                    None
+                                }
+                            });
+                            (dest, src)
+                        }
+                        MemoryOperationKind::Unknown => (None, None),
+                    };
+
+                    let evidence_detail = format!(
+                        "instr=0x{:x} op={} operand_idx={} access={:?} location={:?}",
+                        inst.address.0,
+                        inst.original_mnemonic.as_deref().unwrap_or("?"),
+                        op_idx,
+                        access,
+                        location
+                    );
+
+                    analysis.add_operation(MemoryOperation {
+                        instruction_address: inst.address.0,
+                        kind,
+                        location,
+                        destination_register,
+                        source_register,
+                        evidence_detail,
+                    });
+                }
+            }
+        }
+    }
+
+    analysis
 }
 
 #[cfg(test)]
@@ -323,5 +519,487 @@ mod tests {
             size: 8,
         };
         assert!(h.may_alias(&s));
+    }
+
+    // ============================================================
+    // P0-4.2: Memory Semantic Normalization Tests
+    // ============================================================
+
+    use crate::{Address, IRBasicBlock, IRFunction, IRInstruction, IROp, IROperand};
+
+    /// Helper: build a simple IR function with one block containing given instructions.
+    fn make_function(instructions: Vec<IRInstruction>) -> IRFunction {
+        IRFunction {
+            name: "test_fn".into(),
+            address: Address(0x140001000),
+            basic_blocks: vec![IRBasicBlock {
+                id: 0,
+                start_address: Address(0x140001000),
+                end_address: Address(0x140001100),
+                instructions,
+                successors: vec![],
+                predecessors: vec![],
+            }],
+            entry_block: 0,
+        }
+    }
+
+    /// Helper: build a register operand.
+    fn reg(name: &str, access: OperandAccess) -> IROperand {
+        IROperand::Register {
+            name: name.into(),
+            width: 64,
+            access,
+        }
+    }
+
+    /// Helper: build a memory operand.
+    #[allow(clippy::too_many_arguments)]
+    fn mem(
+        base: Option<&str>,
+        index: Option<&str>,
+        scale: u8,
+        disp: i64,
+        size: u8,
+        access: OperandAccess,
+        rip: bool,
+        eff: Option<u64>,
+    ) -> IROperand {
+        IROperand::Memory {
+            base: base.map(|s| s.into()),
+            index: index.map(|s| s.into()),
+            scale,
+            displacement: disp,
+            size,
+            access,
+            is_rip_relative: rip,
+            effective_address: eff,
+        }
+    }
+
+    /// Helper: build an IR instruction.
+    fn inst(addr: u64, op: IROp, operands: Vec<IROperand>, mnemonic: &str) -> IRInstruction {
+        IRInstruction {
+            address: Address(addr),
+            op,
+            operands,
+            original_mnemonic: Some(mnemonic.into()),
+            original_operands: None,
+            size: 5,
+            reads_registers: vec![],
+            writes_registers: vec![],
+            implicit_reads: vec![],
+            implicit_writes: vec![],
+            reads_flags: false,
+            writes_flags: false,
+        }
+    }
+
+    /// Test 1: Load from stack — mov rcx, [rsp+8]
+    /// Memory operand has access=Read → kind=Load
+    /// Destination register = RCX (access=Write)
+    #[test]
+    fn test_load_from_stack() {
+        let ir = make_function(vec![inst(
+            0x140001000,
+            IROp::Mov,
+            vec![
+                reg("RCX", OperandAccess::Write),
+                mem(Some("RSP"), None, 1, 8, 8, OperandAccess::Read, false, None),
+            ],
+            "mov",
+        )]);
+
+        let analysis = analyze_function_memory(&ir);
+        assert_eq!(analysis.operations.len(), 1);
+
+        let op = &analysis.operations[0];
+        assert_eq!(op.kind, MemoryOperationKind::Load);
+        assert!(op.kind.is_load());
+        assert!(!op.kind.is_store());
+        assert_eq!(op.destination_register, Some("RCX".into()));
+        assert_eq!(op.source_register, None);
+        assert!(matches!(op.location, MemoryLocation::Stack { .. }));
+        assert_eq!(op.instruction_address, 0x140001000);
+        assert!(!op.evidence_detail.is_empty());
+    }
+
+    /// Test 2: Store to stack — mov [rsp+8], rax
+    /// Memory operand has access=Write → kind=Store
+    /// Source register = RAX (access=Read)
+    #[test]
+    fn test_store_to_stack() {
+        let ir = make_function(vec![inst(
+            0x140001005,
+            IROp::Mov,
+            vec![
+                mem(
+                    Some("RSP"),
+                    None,
+                    1,
+                    8,
+                    8,
+                    OperandAccess::Write,
+                    false,
+                    None,
+                ),
+                reg("RAX", OperandAccess::Read),
+            ],
+            "mov",
+        )]);
+
+        let analysis = analyze_function_memory(&ir);
+        assert_eq!(analysis.operations.len(), 1);
+
+        let op = &analysis.operations[0];
+        assert_eq!(op.kind, MemoryOperationKind::Store);
+        assert!(!op.kind.is_load());
+        assert!(op.kind.is_store());
+        assert_eq!(op.destination_register, None);
+        assert_eq!(op.source_register, Some("RAX".into()));
+        assert!(matches!(op.location, MemoryLocation::Stack { .. }));
+    }
+
+    /// Test 3: RIP-relative load — mov eax, [rip+0x1234]
+    /// Should classify as Global, kind=Load
+    #[test]
+    fn test_rip_relative_load() {
+        let ir = make_function(vec![inst(
+            0x14000100a,
+            IROp::Mov,
+            vec![
+                reg("EAX", OperandAccess::Write),
+                mem(
+                    Some("RIP"),
+                    None,
+                    1,
+                    0x1234,
+                    4,
+                    OperandAccess::Read,
+                    true,
+                    Some(0x140005000),
+                ),
+            ],
+            "mov",
+        )]);
+
+        let analysis = analyze_function_memory(&ir);
+        assert_eq!(analysis.operations.len(), 1);
+
+        let op = &analysis.operations[0];
+        assert_eq!(op.kind, MemoryOperationKind::Load);
+        assert_eq!(op.destination_register, Some("EAX".into()));
+        assert!(matches!(
+            op.location,
+            MemoryLocation::Global {
+                address: 0x140005000,
+                ..
+            }
+        ));
+    }
+
+    /// Test 4: Heap access — mov eax, [rbx+rcx*4+0x10]
+    /// Should classify as Heap (conservative), kind=Load
+    #[test]
+    fn test_heap_access_load() {
+        let ir = make_function(vec![inst(
+            0x140001010,
+            IROp::Mov,
+            vec![
+                reg("EAX", OperandAccess::Write),
+                mem(
+                    Some("RBX"),
+                    Some("RCX"),
+                    4,
+                    0x10,
+                    4,
+                    OperandAccess::Read,
+                    false,
+                    None,
+                ),
+            ],
+            "mov",
+        )]);
+
+        let analysis = analyze_function_memory(&ir);
+        let op = &analysis.operations[0];
+        assert_eq!(op.kind, MemoryOperationKind::Load);
+        assert!(matches!(op.location, MemoryLocation::Heap { .. }));
+    }
+
+    /// Test 5: ReadWrite memory — lock add [rsp], 1 (memory is both read and written)
+    /// Memory operand has access=ReadWrite → kind=ReadWrite
+    #[test]
+    fn test_readwrite_memory() {
+        let ir = make_function(vec![inst(
+            0x140001015,
+            IROp::Add,
+            vec![
+                mem(
+                    Some("RSP"),
+                    None,
+                    1,
+                    0,
+                    8,
+                    OperandAccess::ReadWrite,
+                    false,
+                    None,
+                ),
+                IROperand::Immediate {
+                    value: 1,
+                    width: 8,
+                    is_signed: false,
+                },
+            ],
+            "add",
+        )]);
+
+        let analysis = analyze_function_memory(&ir);
+        let op = &analysis.operations[0];
+        assert_eq!(op.kind, MemoryOperationKind::ReadWrite);
+        assert!(op.kind.is_load());
+        assert!(op.kind.is_store());
+        // ReadWrite with immediate operand: no register data source/dest
+        assert_eq!(op.destination_register, None);
+        assert_eq!(op.source_register, None);
+    }
+
+    /// Test 6: destination_register must NOT use "first register" heuristic.
+    /// For a Store, the first register operand might be the memory base (RSP),
+    /// but RSP is inside the Memory operand, not a separate Register operand.
+    /// The source register should be the register with access=Read.
+    #[test]
+    fn test_destination_source_not_first_register_heuristic() {
+        // mov [rsp+0x20], rcx  —  RCX is source (Read), not destination
+        let ir = make_function(vec![inst(
+            0x140001020,
+            IROp::Mov,
+            vec![
+                mem(
+                    Some("RSP"),
+                    None,
+                    1,
+                    0x20,
+                    8,
+                    OperandAccess::Write,
+                    false,
+                    None,
+                ),
+                reg("RCX", OperandAccess::Read),
+            ],
+            "mov",
+        )]);
+
+        let analysis = analyze_function_memory(&ir);
+        let op = &analysis.operations[0];
+        assert_eq!(op.kind, MemoryOperationKind::Store);
+        // source_register must be RCX, not "first register" which would be wrong
+        assert_eq!(op.source_register, Some("RCX".into()));
+        assert_eq!(op.destination_register, None);
+    }
+
+    /// Test 7: Conservative classification — unknown base register → Heap
+    /// Must NOT guess Stack or Global.
+    #[test]
+    fn test_conservative_unknown_base() {
+        let ir = make_function(vec![inst(
+            0x140001025,
+            IROp::Mov,
+            vec![
+                reg("RAX", OperandAccess::Write),
+                mem(Some("R12"), None, 1, 0, 8, OperandAccess::Read, false, None),
+            ],
+            "mov",
+        )]);
+
+        let analysis = analyze_function_memory(&ir);
+        let op = &analysis.operations[0];
+        // R12 is not RSP/RBP → must be Heap (conservative), not Stack
+        assert!(matches!(op.location, MemoryLocation::Heap { .. }));
+    }
+
+    /// Test 8: Evidence chain — every operation has instruction_address and detail
+    #[test]
+    fn test_evidence_chain() {
+        let ir = make_function(vec![
+            inst(
+                0x140001000,
+                IROp::Mov,
+                vec![
+                    reg("RCX", OperandAccess::Write),
+                    mem(Some("RSP"), None, 1, 8, 8, OperandAccess::Read, false, None),
+                ],
+                "mov",
+            ),
+            inst(
+                0x140001005,
+                IROp::Mov,
+                vec![
+                    mem(
+                        Some("RSP"),
+                        None,
+                        1,
+                        16,
+                        8,
+                        OperandAccess::Write,
+                        false,
+                        None,
+                    ),
+                    reg("RDX", OperandAccess::Read),
+                ],
+                "mov",
+            ),
+        ]);
+
+        let analysis = analyze_function_memory(&ir);
+        assert_eq!(analysis.operations.len(), 2);
+
+        for op in &analysis.operations {
+            assert!(
+                op.instruction_address != 0,
+                "instruction_address must be set"
+            );
+            assert!(
+                !op.evidence_detail.is_empty(),
+                "evidence_detail must not be empty"
+            );
+            // evidence_detail should contain the instruction address
+            assert!(
+                op.evidence_detail
+                    .contains(&format!("0x{:x}", op.instruction_address)),
+                "evidence_detail should contain instruction address"
+            );
+        }
+
+        // First op is Load at 0x140001000
+        assert_eq!(analysis.operations[0].instruction_address, 0x140001000);
+        assert_eq!(analysis.operations[0].kind, MemoryOperationKind::Load);
+        // Second op is Store at 0x140001005
+        assert_eq!(analysis.operations[1].instruction_address, 0x140001005);
+        assert_eq!(analysis.operations[1].kind, MemoryOperationKind::Store);
+    }
+
+    /// Test 9: MemoryOperationKind::from_access maps correctly
+    #[test]
+    fn test_kind_from_access() {
+        assert_eq!(
+            MemoryOperationKind::from_access(OperandAccess::Read),
+            MemoryOperationKind::Load
+        );
+        assert_eq!(
+            MemoryOperationKind::from_access(OperandAccess::Write),
+            MemoryOperationKind::Store
+        );
+        assert_eq!(
+            MemoryOperationKind::from_access(OperandAccess::ReadWrite),
+            MemoryOperationKind::ReadWrite
+        );
+    }
+
+    /// Test 10: Multiple memory operations in one function — loads and stores counted separately
+    #[test]
+    fn test_load_store_counts() {
+        let ir = make_function(vec![
+            inst(
+                0x1000,
+                IROp::Mov,
+                vec![
+                    reg("RAX", OperandAccess::Write),
+                    mem(Some("RSP"), None, 1, 8, 8, OperandAccess::Read, false, None),
+                ],
+                "mov",
+            ),
+            inst(
+                0x1005,
+                IROp::Mov,
+                vec![
+                    mem(
+                        Some("RSP"),
+                        None,
+                        1,
+                        16,
+                        8,
+                        OperandAccess::Write,
+                        false,
+                        None,
+                    ),
+                    reg("RBX", OperandAccess::Read),
+                ],
+                "mov",
+            ),
+            inst(
+                0x100a,
+                IROp::Mov,
+                vec![
+                    reg("RCX", OperandAccess::Write),
+                    mem(
+                        Some("RBP"),
+                        None,
+                        1,
+                        -8,
+                        8,
+                        OperandAccess::Read,
+                        false,
+                        None,
+                    ),
+                ],
+                "mov",
+            ),
+        ]);
+
+        let analysis = analyze_function_memory(&ir);
+        assert_eq!(analysis.load_count(), 2);
+        assert_eq!(analysis.store_count(), 1);
+        assert_eq!(analysis.count_by_kind(MemoryOperationKind::Load), 2);
+        assert_eq!(analysis.count_by_kind(MemoryOperationKind::Store), 1);
+        assert_eq!(analysis.operations.len(), 3);
+    }
+
+    /// Test 11: Stack slot tracking — RSP and RBP both count as stack
+    #[test]
+    fn test_stack_slot_tracking() {
+        let ir = make_function(vec![
+            inst(
+                0x1000,
+                IROp::Mov,
+                vec![
+                    reg("RAX", OperandAccess::Write),
+                    mem(
+                        Some("RSP"),
+                        None,
+                        1,
+                        -0x20,
+                        8,
+                        OperandAccess::Read,
+                        false,
+                        None,
+                    ),
+                ],
+                "mov",
+            ),
+            inst(
+                0x1005,
+                IROp::Mov,
+                vec![
+                    reg("RBX", OperandAccess::Write),
+                    mem(
+                        Some("RBP"),
+                        None,
+                        1,
+                        -0x18,
+                        8,
+                        OperandAccess::Read,
+                        false,
+                        None,
+                    ),
+                ],
+                "mov",
+            ),
+        ]);
+
+        let analysis = analyze_function_memory(&ir);
+        assert_eq!(analysis.stack_slots.len(), 2);
+        assert!(analysis.stack_slots.contains(&("RSP".to_string(), -0x20)));
+        assert!(analysis.stack_slots.contains(&("RBP".to_string(), -0x18)));
     }
 }
