@@ -361,17 +361,19 @@ impl FunctionDiscovery {
             .collect();
         let (end_status, end_contradictions) = adjudicate_reality(&end_positive, &end_negative);
 
-        // End address: prefer precise claim subject, then validation.estimated_end,
-        // then fall back to end_address (from .pdata).
-        // Observed End ≠ Estimated End ≠ Confirmed End — estimated_end is marked
-        // as Contextual/Probable, not Confirmed.
+        // End address: only from PRECISE sources.
+        // - Claim subjects that differ from function start (e.g. Pdata EndAddress)
+        // - Function.end_address (from .pdata, authoritative)
+        // NEVER use validation.estimated_end — it is an estimate, not Reality.
+        // NEVER use claim subject == function start (TailCall/ValidReturn evidence
+        // is located at function entry, not at the actual end instruction).
+        // Observed End ≠ Estimated End ≠ Confirmed End.
         let end_addr = end_positive
             .iter()
             .find_map(|c| match c.subject {
-                fox_core::ClaimSubject::Address(a) => Some(a),
+                fox_core::ClaimSubject::Address(a) if a != addr => Some(a),
                 _ => None,
             })
-            .or_else(|| entry.value.validation.estimated_end)
             .or_else(|| entry.value.end_address.map(|a| a.0));
 
         let end = BoundaryReality {
