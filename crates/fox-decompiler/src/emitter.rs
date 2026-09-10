@@ -14,7 +14,7 @@
 //! - No fixing P0-6.6A nesting gap (flat if/else is OK for now)
 
 use crate::condition::ConditionRecovery;
-use crate::expression::CallTarget;
+use crate::expression::{CallTarget, Expression};
 use crate::structured_ir::{AssignTarget, DecompilerFunction, Statement, StatementEvidence};
 
 /// Emitter configuration.
@@ -28,6 +28,10 @@ pub struct EmitterConfig {
     pub indent: String,
     /// Show function header comment with metadata.
     pub show_header: bool,
+    /// Maximum characters per expression before truncation (P0-6.9).
+    pub max_expression_chars: usize,
+    /// Maximum recursion depth for expression formatting (P0-6.9).
+    pub max_expression_depth: usize,
 }
 
 impl Default for EmitterConfig {
@@ -37,6 +41,8 @@ impl Default for EmitterConfig {
             show_phi: false,
             indent: "    ".to_string(),
             show_header: true,
+            max_expression_chars: 400,
+            max_expression_depth: 8,
         }
     }
 }
@@ -49,6 +55,8 @@ impl EmitterConfig {
             show_phi: false,
             indent: "    ".to_string(),
             show_header: false,
+            max_expression_chars: 400,
+            max_expression_depth: 8,
         }
     }
 
@@ -59,6 +67,8 @@ impl EmitterConfig {
             show_phi: false,
             indent: "    ".to_string(),
             show_header: true,
+            max_expression_chars: 400,
+            max_expression_depth: 8,
         }
     }
 }
@@ -129,7 +139,7 @@ impl CLikeEmitter {
                     "{}{} = {};{}\n",
                     indent,
                     self.fmt_target(lhs),
-                    rhs,
+                    self.format_expr(rhs),
                     ev
                 ));
             }
@@ -183,7 +193,11 @@ impl CLikeEmitter {
 
                 let inner_indent = self.config.indent.repeat(depth + 1);
                 if let Some(val) = return_value {
-                    out.push_str(&format!("{}return {};\n", inner_indent, val));
+                    out.push_str(&format!(
+                        "{}return {};\n",
+                        inner_indent,
+                        self.format_expr(val)
+                    ));
                 } else {
                     out.push_str(&format!("{}return;\n", inner_indent));
                 }
@@ -194,7 +208,12 @@ impl CLikeEmitter {
             Statement::Return { value, evidence } => {
                 let ev = self.fmt_evidence(evidence);
                 if let Some(val) = value {
-                    out.push_str(&format!("{}return {};{}\n", indent, val, ev));
+                    out.push_str(&format!(
+                        "{}return {};{}\n",
+                        indent,
+                        self.format_expr(val),
+                        ev
+                    ));
                 } else {
                     out.push_str(&format!("{}return;{}\n", indent, ev));
                 }
@@ -248,7 +267,7 @@ impl CLikeEmitter {
                 let ev = self.fmt_evidence(evidence);
                 let inc: Vec<String> = incoming
                     .iter()
-                    .map(|p| format!("{}@blk{}", p.value, p.block_id))
+                    .map(|p| format!("{}@blk{}", self.format_expr(&p.value), p.block_id))
                     .collect();
                 out.push_str(&format!(
                     "{}{} = phi({}); /* SSA phi */{}\n",
@@ -266,7 +285,7 @@ impl CLikeEmitter {
             AssignTarget::Variable { name, version, .. } => {
                 format!("{}_{}", name, version)
             }
-            AssignTarget::Memory { address } => format!("*({})", address),
+            AssignTarget::Memory { address } => format!("*({})", self.format_expr(address)),
             AssignTarget::Unknown => "/* unknown */".to_string(),
         }
     }
@@ -305,6 +324,126 @@ impl CLikeEmitter {
             .map(|a| format!("0x{:X}", a))
             .collect();
         format!(" /* @{} */", addrs.join(", "))
+    }
+
+    // --- P0-6.9: Expression truncation to prevent output explosion ---
+
+    /// Format an Expression with length/depth truncation.
+    /// Prevents 100KB+ expressions from making output unreadable.
+    fn format_expr(&self, expr: &Expression) -> String {
+        let mut buf = String::new();
+        let mut truncated = false;
+        self.fmt_expr_truncated(
+            expr,
+            &mut buf,
+            &mut truncated,
+            self.config.max_expression_chars,
+            self.config.max_expression_depth,
+            0,
+        );
+        if truncated {
+            format!("{} /* expr truncated */", buf)
+        } else {
+            buf
+        }
+    }
+
+    fn fmt_expr_truncated(
+        &self,
+        expr: &Expression,
+        buf: &mut String,
+        truncated: &mut bool,
+        max_chars: usize,
+        max_depth: usize,
+        depth: usize,
+    ) {
+        if *truncated {
+            return;
+        }
+        if buf.len() >= max_chars {
+            *truncated = true;
+            return;
+        }
+        if depth >= max_depth {
+            buf.push_str("...");
+            *truncated = true;
+            return;
+        }
+
+        match expr {
+            Expression::Constant(v) => {
+                buf.push_str(&v.to_string());
+            }
+            Expression::Variable { name, version } => {
+                buf.push_str(&format!("{}_{}", name, version));
+            }
+            Expression::Binary { op, left, right } => {
+                buf.push('(');
+                self.fmt_expr_truncated(left, buf, truncated, max_chars, max_depth, depth + 1);
+                buf.push_str(&format!(" {} ", op));
+                self.fmt_expr_truncated(right, buf, truncated, max_chars, max_depth, depth + 1);
+                buf.push(')');
+            }
+            Expression::Unary { op, operand } => {
+                buf.push_str(&format!("{}(", op));
+                self.fmt_expr_truncated(operand, buf, truncated, max_chars, max_depth, depth + 1);
+                buf.push(')');
+            }
+            Expression::Load { address } => {
+                buf.push_str("*(");
+                self.fmt_expr_truncated(address, buf, truncated, max_chars, max_depth, depth + 1);
+                buf.push(')');
+            }
+            Expression::Call { target, arguments } => {
+                buf.push_str("call(");
+                match target {
+                    CallTarget::Address(a) => buf.push_str(&format!("0x{:x}", a)),
+                    CallTarget::Symbol(s) => buf.push_str(s),
+                    CallTarget::Unknown => buf.push('?'),
+                }
+                for (i, arg) in arguments.iter().take(4).enumerate() {
+                    if i > 0 {
+                        buf.push_str(", ");
+                    }
+                    self.fmt_expr_truncated(arg, buf, truncated, max_chars, max_depth, depth + 1);
+                }
+                if arguments.len() > 4 {
+                    buf.push_str(&format!(", ...{} more", arguments.len() - 4));
+                }
+                buf.push(')');
+            }
+            Expression::Phi { incoming } => {
+                // Phi is the #1 source of expression explosion.
+                // Show at most 3 incoming, and don't recurse deeply into phi values.
+                if incoming.len() > 3 {
+                    buf.push_str(&format!("phi({}incoming:", incoming.len()));
+                } else {
+                    buf.push_str("phi(");
+                }
+                for (i, inc) in incoming.iter().take(3).enumerate() {
+                    if i > 0 {
+                        buf.push_str(", ");
+                    }
+                    buf.push_str(&format!("bb{}:", inc.block_id));
+                    // Only shallow-format phi values (depth limit prevents recursion)
+                    self.fmt_expr_truncated(
+                        &inc.value,
+                        buf,
+                        truncated,
+                        max_chars,
+                        max_depth.min(2),
+                        depth + 1,
+                    );
+                }
+                if incoming.len() > 3 {
+                    buf.push_str(&format!(", ...{} more", incoming.len() - 3));
+                }
+                buf.push(')');
+            }
+            Expression::Unknown { reason } => {
+                buf.push_str(&format!("<?{}>", reason));
+            }
+        }
     }
 }
 

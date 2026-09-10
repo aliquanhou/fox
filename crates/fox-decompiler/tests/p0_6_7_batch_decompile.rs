@@ -468,6 +468,8 @@ fn process_single_function(
         show_phi: false,
         indent: "    ".to_string(),
         show_header: false,
+        max_expression_chars: 400,
+        max_expression_depth: 8,
     });
     let output = emitter.emit(&func);
     let output_chars = output.len();
