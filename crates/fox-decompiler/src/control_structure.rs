@@ -179,8 +179,13 @@ pub fn recover_control_structures(cfg: &FunctionCfg, ssa: &SSAFunction) -> Vec<C
             }
         };
 
-        // --- Detection 1: If/Else with common successor (merge) ---
-        if let Some(merge_block) = find_common_successor(cfg, tt, ft) {
+        // --- Detection 1: If/Else with bounded common reachable merge ---
+        // Uses BFS forward reachability (depth 8) to find a merge block
+        // reachable from both branch paths. Excludes loop back-edges.
+        const MERGE_BFS_DEPTH: usize = 8;
+        if let Some(merge_block) =
+            find_bounded_common_merge(cfg, tt, ft, block.start_address.0, MERGE_BFS_DEPTH)
+        {
             let merge_address = cfg.blocks[merge_block].start_address.0;
             results.push(ControlStructure::IfElse(IfElse {
                 condition,
@@ -200,8 +205,9 @@ pub fn recover_control_structures(cfg: &FunctionCfg, ssa: &SSAFunction) -> Vec<C
             continue;
         }
 
-        // --- Detection 2: Guard Clause / Early Return ---
-        // One branch path reaches a Return block before the other.
+        // --- Detection 2: Guard Clause / Early Return (evidence-first) ---
+        // One branch path has an immediate Return edge in CFG, and the
+        // other path does NOT. Double-return (both immediate) → Unknown.
         if let Some((body_block, return_block, return_is_taken)) = detect_guard_clause(cfg, tt, ft)
         {
             results.push(ControlStructure::GuardClause(GuardClause {
@@ -213,9 +219,9 @@ pub fn recover_control_structures(cfg: &FunctionCfg, ssa: &SSAFunction) -> Vec<C
                 evidence: StructureEvidence {
                     return_edge_detected: true,
                     detection_reason: format!(
-                        "branch @ 0x{:X} reaches Return before other path; early-return block @ 0x{:X}",
-                        branch_address,
-                        cfg.blocks[return_block].start_address.0
+                        "branch @ 0x{:X}: return path has immediate CFG Return edge; \
+                         continuation path does not; early-return block @ 0x{:X}",
+                        branch_address, cfg.blocks[return_block].start_address.0
                     ),
                     ..base_evidence
                 },
@@ -226,11 +232,12 @@ pub fn recover_control_structures(cfg: &FunctionCfg, ssa: &SSAFunction) -> Vec<C
         // --- Fail-closed: Unknown ---
         results.push(ControlStructure::Unknown(UnknownBranch {
             branch_block: block_id,
-            reason: "no common successor and no detectable early-return path".into(),
+            reason: "no bounded merge and no evidence-first guard clause".into(),
             condition,
             evidence: StructureEvidence {
                 detection_reason:
-                    "unstructured conditional branch (no merge, no early return detected)".into(),
+                    "unstructured conditional branch (no bounded merge, no evidence-first guard clause)"
+                        .into(),
                 ..base_evidence
             },
         }));
@@ -243,88 +250,68 @@ pub fn recover_control_structures(cfg: &FunctionCfg, ssa: &SSAFunction) -> Vec<C
 // Detection helpers
 // ---------------------------------------------------------------------------
 
-/// Find a common successor block of two blocks (the merge point).
+/// Find a common reachable merge block of two branch paths.
 ///
-/// Returns the first common successor block index, or None.
-fn find_common_successor(cfg: &FunctionCfg, a: usize, b: usize) -> Option<usize> {
-    let a_succs: HashSet<usize> = cfg.blocks[a]
-        .successors
-        .iter()
-        .filter_map(|e| e.target_block)
-        .collect();
-    let b_succs: HashSet<usize> = cfg.blocks[b]
-        .successors
-        .iter()
-        .filter_map(|e| e.target_block)
-        .collect();
-
-    a_succs.intersection(&b_succs).next().copied()
-}
-
-/// Detect whether one branch path reaches a Return before the other.
+/// Uses bounded BFS forward reachability from both `a` and `b`, and returns
+/// the first block reachable from both within `max_depth` steps.
 ///
-/// Returns Some((body_block, return_block, return_is_taken_branch)) if a
-/// guard clause pattern is detected, None otherwise.
+/// Loop / back-edge exclusion: a candidate merge block must have
+/// `start_address >= branch_block_address`, which prevents loop headers
+/// (located before the branch) from being falsely identified as merges.
 ///
-/// Uses shortest-path distance to a Return block. If one branch reaches
-/// Return in strictly fewer steps than the other (and they don't merge),
-/// the shorter path is the early-return / guard clause path.
-///
-/// `true_target` = ConditionalTrue (taken branch), `false_target` = ConditionalFalse.
-fn detect_guard_clause(
+/// Returns the first common reachable block index, or None.
+fn find_bounded_common_merge(
     cfg: &FunctionCfg,
-    true_target: usize,
-    false_target: usize,
-) -> Option<(usize, usize, bool)> {
-    const MAX_DEPTH: usize = 15;
-
-    let true_dist = shortest_return_distance(cfg, true_target, MAX_DEPTH);
-    let false_dist = shortest_return_distance(cfg, false_target, MAX_DEPTH);
-
-    match (true_dist, false_dist) {
-        (Some(t), Some(f)) if t < f => Some((false_target, true_target, true)),
-        (Some(t), Some(f)) if f < t => Some((true_target, false_target, false)),
-        // Equal distance: both paths reach return. In the common `jcc error_block`
-        // pattern, the taken (ConditionalTrue) branch is the early-return path.
-        // This is a convention-based tiebreaker, not a guess about semantics —
-        // the structure is still a valid guard clause regardless of which side
-        // is labeled "return".
-        (Some(_), Some(_)) => Some((false_target, true_target, true)),
-        (Some(_), None) => Some((false_target, true_target, true)),
-        (None, Some(_)) => Some((true_target, false_target, false)),
-        _ => None,
-    }
-}
-
-/// BFS to find the shortest distance from `start` to a block with a Return edge.
-///
-/// Returns Some(distance) or None if no Return is reachable within max_depth.
-/// Cycle-safe (tracks visited blocks).
-fn shortest_return_distance(cfg: &FunctionCfg, start: usize, max_depth: usize) -> Option<usize> {
+    a: usize,
+    b: usize,
+    branch_block_address: u64,
+    max_depth: usize,
+) -> Option<usize> {
     use std::collections::VecDeque;
 
-    let mut visited = HashSet::new();
+    // BFS from `a`, collect all reachable block indices within max_depth.
+    let mut a_reachable: HashSet<usize> = HashSet::new();
     let mut queue = VecDeque::new();
-    queue.push_back((start, 0usize));
-    visited.insert(start);
-
-    while let Some((block_id, depth)) = queue.pop_front() {
-        let block = &cfg.blocks[block_id];
-
-        // Check if this block has a Return successor
-        if block.successors.iter().any(|e| e.kind == EdgeKind::Return) {
-            return Some(depth);
-        }
-
+    queue.push_back((a, 0usize));
+    a_reachable.insert(a);
+    while let Some((bid, depth)) = queue.pop_front() {
         if depth >= max_depth {
             continue;
         }
+        for e in &cfg.blocks[bid].successors {
+            if let Some(tid) = e.target_block {
+                // Skip edges that go backward (loop back-edges)
+                if cfg.blocks[tid].start_address.0 < branch_block_address {
+                    continue;
+                }
+                if !a_reachable.contains(&tid) {
+                    a_reachable.insert(tid);
+                    queue.push_back((tid, depth + 1));
+                }
+            }
+        }
+    }
 
-        // Continue BFS
-        for succ in &block.successors {
-            if let Some(tid) = succ.target_block {
-                if !visited.contains(&tid) {
-                    visited.insert(tid);
+    // BFS from `b`, find first block also in `a_reachable`.
+    let mut b_visited: HashSet<usize> = HashSet::new();
+    let mut queue = VecDeque::new();
+    queue.push_back((b, 0usize));
+    b_visited.insert(b);
+    while let Some((bid, depth)) = queue.pop_front() {
+        // Check if this block is a common merge (excluding the start points a/b themselves)
+        if bid != a && bid != b && a_reachable.contains(&bid) {
+            return Some(bid);
+        }
+        if depth >= max_depth {
+            continue;
+        }
+        for e in &cfg.blocks[bid].successors {
+            if let Some(tid) = e.target_block {
+                if cfg.blocks[tid].start_address.0 < branch_block_address {
+                    continue;
+                }
+                if !b_visited.contains(&tid) {
+                    b_visited.insert(tid);
                     queue.push_back((tid, depth + 1));
                 }
             }
@@ -332,6 +319,57 @@ fn shortest_return_distance(cfg: &FunctionCfg, start: usize, max_depth: usize) -
     }
 
     None
+}
+
+/// Check whether a block is an "immediate return path".
+///
+/// An immediate return path is strong evidence for a guard clause / early
+/// return: the branch target block **itself** has a Return edge in the CFG.
+///
+/// This is the most conservative, evidence-first definition. It requires the
+/// Return edge to be present directly on the branch target block, not
+/// inferred from distance comparison or reachability through intermediate
+/// blocks.
+///
+/// Returns true if `start` itself has a Return successor edge.
+fn is_immediate_return_path(cfg: &FunctionCfg, start: usize) -> bool {
+    cfg.blocks[start]
+        .successors
+        .iter()
+        .any(|e| e.kind == EdgeKind::Return)
+}
+
+/// Detect a guard clause / early return using evidence-first criteria.
+///
+/// A guard clause requires:
+/// - One branch path is an **immediate return path** (has Return edge in CFG).
+/// - The other branch path is **NOT** an immediate return path.
+///
+/// If both paths are immediate return (double return), or neither is, this
+/// is NOT a guard clause — returns None.
+///
+/// This replaces the previous shortest-return-distance heuristic, which
+/// produced massive false positives (89% of GuardClause had body also
+/// reaching Return).
+///
+/// `true_target` = ConditionalTrue (taken branch), `false_target` = ConditionalFalse.
+fn detect_guard_clause(
+    cfg: &FunctionCfg,
+    true_target: usize,
+    false_target: usize,
+) -> Option<(usize, usize, bool)> {
+    let true_is_ret = is_immediate_return_path(cfg, true_target);
+    let false_is_ret = is_immediate_return_path(cfg, false_target);
+
+    match (true_is_ret, false_is_ret) {
+        // Only true path is immediate return → guard clause, return=true path
+        (true, false) => Some((false_target, true_target, true)),
+        // Only false path is immediate return → guard clause, return=false path
+        (false, true) => Some((true_target, false_target, false)),
+        // Both immediate return (double return) → NOT a guard clause
+        // Neither immediate return → NOT a guard clause
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -550,8 +588,10 @@ mod tests {
     }
 
     #[test]
-    fn test_unknown_ambiguous_branch() {
-        // B0: cond jump → B1, B2; neither merges nor returns within depth
+    fn test_multi_block_if_else_bounded_merge() {
+        // B0: cond → B1 (true), B2 (false); B1→B3→M, B2→B4→M
+        // Old direct-successor logic would miss this (B1→{B3}, B2→{B4}, no intersection).
+        // New bounded BFS finds M as common reachable merge.
         let cfg = make_cfg(vec![
             (
                 0,
@@ -565,19 +605,146 @@ mod tests {
             (2, 0x1015, vec![(EdgeKind::Fallthrough, Some(4), 0x1025)]),
             (3, 0x1020, vec![(EdgeKind::Fallthrough, Some(5), 0x1030)]),
             (4, 0x1025, vec![(EdgeKind::Fallthrough, Some(5), 0x1030)]),
-            (5, 0x1030, vec![]),
+            (5, 0x1030, vec![(EdgeKind::Return, None, 0)]),
         ]);
         let ssa = make_ssa_with_condjump(0);
         let structures = recover_control_structures(&cfg, &ssa);
 
         assert_eq!(structures.len(), 1);
-        // B3→B5 and B4→B5: B5 is a common successor of B3 and B4, but NOT of B1 and B2.
-        // Wait — B1→B3, B2→B4. B3→B5, B4→B5. So B1's successor is B3, B2's successor is B4.
-        // B3 and B4 don't share a successor directly. But B3→B5 and B4→B5 means B5 is a
-        // common successor of B3 and B4, not B1 and B2.
-        // find_common_successor checks B1 and B2's direct successors. B1→{B3}, B2→{B4}.
-        // No common successor. Then guard clause check: B1 reaches return? B1→B3→B5(no return).
-        // B2→B4→B5(no return). Neither reaches return within depth 12. So Unknown.
+        match &structures[0] {
+            ControlStructure::IfElse(ie) => {
+                assert_eq!(ie.then_block, 1);
+                assert_eq!(ie.else_block, 2);
+                assert_eq!(ie.merge_block, Some(5));
+            }
+            other => panic!("expected IfElse (bounded merge), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_double_return_is_unknown_not_guard() {
+        // B0: cond → B1 (true, immediate return), B2 (false, immediate return)
+        // Both paths are immediate return → double return → NOT a guard clause → Unknown
+        // This tests that the equal-distance tiebreaker has been removed.
+        let cfg = make_cfg(vec![
+            (
+                0,
+                0x1000,
+                vec![
+                    (EdgeKind::ConditionalTrue, Some(1), 0x1010),
+                    (EdgeKind::ConditionalFalse, Some(2), 0x1015),
+                ],
+            ),
+            (1, 0x1010, vec![(EdgeKind::Return, None, 0)]),
+            (2, 0x1015, vec![(EdgeKind::Return, None, 0)]),
+        ]);
+        let ssa = make_ssa_with_condjump(0);
+        let structures = recover_control_structures(&cfg, &ssa);
+
+        assert_eq!(structures.len(), 1);
+        match &structures[0] {
+            ControlStructure::Unknown(ub) => {
+                assert!(ub.reason.contains("no bounded merge") || ub.reason.contains("guard"));
+            }
+            other => panic!("expected Unknown (double return), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_normal_if_else_both_eventually_return_is_ifelse() {
+        // B0: cond → B1, B2; both paths do work then return, with common merge M.
+        // Neither side is "immediate return" (both have multiple blocks before return).
+        // This is a normal if/else, NOT a guard clause.
+        let cfg = make_cfg(vec![
+            (
+                0,
+                0x1000,
+                vec![
+                    (EdgeKind::ConditionalTrue, Some(1), 0x1010),
+                    (EdgeKind::ConditionalFalse, Some(2), 0x1015),
+                ],
+            ),
+            (1, 0x1010, vec![(EdgeKind::Fallthrough, Some(3), 0x1020)]),
+            (2, 0x1015, vec![(EdgeKind::Fallthrough, Some(4), 0x1025)]),
+            (3, 0x1020, vec![(EdgeKind::Fallthrough, Some(5), 0x1030)]),
+            (4, 0x1025, vec![(EdgeKind::Fallthrough, Some(5), 0x1030)]),
+            (5, 0x1030, vec![(EdgeKind::Return, None, 0)]),
+        ]);
+        let ssa = make_ssa_with_condjump(0);
+        let structures = recover_control_structures(&cfg, &ssa);
+
+        assert_eq!(structures.len(), 1);
+        // Bounded BFS finds M=block[5] as common merge → IfElse
+        match &structures[0] {
+            ControlStructure::IfElse(ie) => {
+                assert_eq!(ie.merge_block, Some(5));
+            }
+            other => panic!(
+                "expected IfElse (normal if/else with merge), got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn test_guard_clause_immediate_return_vs_continuation() {
+        // B0: cond → B1 (true, immediate return), B2 (false, continues to B3 then return)
+        // B1 is immediate return, B2 is NOT → genuine guard clause.
+        let cfg = make_cfg(vec![
+            (
+                0,
+                0x1000,
+                vec![
+                    (EdgeKind::ConditionalTrue, Some(1), 0x1010),
+                    (EdgeKind::ConditionalFalse, Some(2), 0x1015),
+                ],
+            ),
+            (1, 0x1010, vec![(EdgeKind::Return, None, 0)]),
+            (2, 0x1015, vec![(EdgeKind::Fallthrough, Some(3), 0x1020)]),
+            (3, 0x1020, vec![(EdgeKind::Return, None, 0)]),
+        ]);
+        let ssa = make_ssa_with_condjump(0);
+        let structures = recover_control_structures(&cfg, &ssa);
+
+        assert_eq!(structures.len(), 1);
+        match &structures[0] {
+            ControlStructure::GuardClause(gc) => {
+                assert_eq!(gc.body_block, 2);
+                assert_eq!(gc.return_block, 1);
+                assert!(gc.return_is_taken_branch);
+                assert!(gc.evidence.return_edge_detected);
+                // Evidence should mention "immediate CFG Return edge"
+                assert!(gc
+                    .evidence
+                    .detection_reason
+                    .contains("immediate CFG Return edge"));
+            }
+            other => panic!("expected GuardClause, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_genuinely_unstructured_unknown() {
+        // B0: cond → B1, B2; paths diverge and never merge, neither immediate return.
+        // B1→B3 (dead end), B2→B4 (dead end). No common merge, no guard → Unknown.
+        let cfg = make_cfg(vec![
+            (
+                0,
+                0x1000,
+                vec![
+                    (EdgeKind::ConditionalTrue, Some(1), 0x1010),
+                    (EdgeKind::ConditionalFalse, Some(2), 0x1015),
+                ],
+            ),
+            (1, 0x1010, vec![(EdgeKind::Fallthrough, Some(3), 0x1020)]),
+            (2, 0x1015, vec![(EdgeKind::Fallthrough, Some(4), 0x1025)]),
+            (3, 0x1020, vec![]),
+            (4, 0x1025, vec![]),
+        ]);
+        let ssa = make_ssa_with_condjump(0);
+        let structures = recover_control_structures(&cfg, &ssa);
+
+        assert_eq!(structures.len(), 1);
         match &structures[0] {
             ControlStructure::Unknown(_) => {}
             other => panic!("expected Unknown, got {:?}", other),

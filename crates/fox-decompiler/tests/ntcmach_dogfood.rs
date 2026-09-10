@@ -317,15 +317,23 @@ fn ntcmach_control_structure_recovery_dogfood_0x41f000() {
     println!("GuardClause: {}", guard_count);
     println!("Unknown: {}", unknown_count);
 
-    // 0x41F000 has 2 test+jz guard clauses (both jump to same error block)
-    // Expected: at least 2 GuardClause structures
+    // 0x41F000 has 2 test+jz branches:
+    // - #1 @ 0x41F010: true→error block (immediate Return), false→normal continuation
+    //   → genuine GuardClause
+    // - #2 @ 0x41F020: true→error block (Return), false→block with indirect call+ret (Return)
+    //   → double return → Unknown (per P0-6.4B-R: no tiebreaker, double return is Unknown)
     assert!(
-        guard_count >= 2,
-        "expected at least 2 GuardClause structures in 0x41F000, got {}",
+        guard_count >= 1,
+        "expected at least 1 GuardClause structure in 0x41F000, got {}",
         guard_count
     );
+    assert!(
+        unknown_count >= 1,
+        "expected at least 1 Unknown (double-return) in 0x41F000, got {}",
+        unknown_count
+    );
 
-    // Verify the two specific guard clause branch addresses
+    // Verify the specific guard clause branch address
     let guard_addrs: Vec<u64> = structures
         .iter()
         .filter_map(|s| match s {
@@ -339,10 +347,19 @@ fn ntcmach_control_structure_recovery_dogfood_0x41f000() {
         "expected guard clause at 0x41F010 (first test+jz), got {:?}",
         guard_addrs
     );
+
+    // Verify the double-return Unknown at 0x41F020
+    let unknown_addrs: Vec<u64> = structures
+        .iter()
+        .filter_map(|s| match s {
+            ControlStructure::Unknown(ub) => Some(ub.evidence.branch_address),
+            _ => None,
+        })
+        .collect();
     assert!(
-        guard_addrs.contains(&0x41F020),
-        "expected guard clause at 0x41F020 (second test+jz), got {:?}",
-        guard_addrs
+        unknown_addrs.contains(&0x41F020),
+        "expected Unknown (double-return) at 0x41F020, got {:?}",
+        unknown_addrs
     );
 
     // Verify evidence traceability
