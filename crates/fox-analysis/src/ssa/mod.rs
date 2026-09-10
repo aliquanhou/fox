@@ -213,11 +213,27 @@ impl SSAConstructor {
                         IROperand::Label(l) => {
                             ssa_operands.push(SSAOperand::Label(l.clone()));
                         }
-                        IROperand::Flags { .. } => {
-                            ssa_operands.push(SSAOperand::Variable {
-                                name: "FLAGS".to_string(),
-                                version: 0,
-                            });
+                        IROperand::Flags { access } => {
+                            // FLAGS logical SSA state: Write→new version, Read→current
+                            match access {
+                                OperandAccess::Write | OperandAccess::ReadWrite => {
+                                    let version =
+                                        variable_versions.entry("FLAGS".to_string()).or_insert(0);
+                                    *version += 1;
+                                    ssa_operands.push(SSAOperand::Variable {
+                                        name: "FLAGS".to_string(),
+                                        version: *version,
+                                    });
+                                }
+                                OperandAccess::Read => {
+                                    let version =
+                                        variable_versions.get("FLAGS").copied().unwrap_or(0);
+                                    ssa_operands.push(SSAOperand::Variable {
+                                        name: "FLAGS".to_string(),
+                                        version,
+                                    });
+                                }
+                            }
                         }
                         _ => {
                             ssa_operands.push(SSAOperand::Memory {
@@ -229,7 +245,7 @@ impl SSAConstructor {
 
                 ssa_insts.push(SSAInstruction {
                     address: inst.address.0,
-                    op: format!("{:?}", inst.op),
+                    op: inst.op.name().to_string(),
                     operands: ssa_operands,
                     original_mnemonic: inst.original_mnemonic.clone().unwrap_or_default(),
                     destination_operand_idx: dest_idx,
@@ -546,15 +562,53 @@ impl SSAConstructor {
                     IROperand::Label(l) => {
                         ssa_operands.push(SSAOperand::Label(l.clone()));
                     }
-                    IROperand::Flags { .. } => {
-                        let cur_ver = version_stack
-                            .get("FLAGS")
-                            .and_then(|s| s.last().copied())
-                            .unwrap_or(0);
-                        ssa_operands.push(SSAOperand::Variable {
-                            name: "FLAGS".to_string(),
-                            version: cur_ver,
-                        });
+                    IROperand::Flags { access } => {
+                        // FLAGS is a logical SSA state variable.
+                        // Write/ReadWrite → allocate new version (definition).
+                        // Read → use current version (use).
+                        // This establishes CMP/TEST → FLAGS def → Jcc use chain.
+                        match access {
+                            OperandAccess::Write | OperandAccess::ReadWrite => {
+                                let new_ver =
+                                    Self::push_version("FLAGS", version_counter, version_stack);
+                                pushed_versions.push("FLAGS".to_string());
+                                version_def
+                                    .insert(("FLAGS".to_string(), new_ver), (block_id, inst_idx));
+                                def_use.entry((block_id, inst_idx)).or_default();
+                                ssa_operands.push(SSAOperand::Variable {
+                                    name: "FLAGS".to_string(),
+                                    version: new_ver,
+                                });
+                            }
+                            OperandAccess::Read => {
+                                let cur_ver = version_stack
+                                    .get("FLAGS")
+                                    .and_then(|s| s.last().copied())
+                                    .unwrap_or(0);
+                                ssa_operands.push(SSAOperand::Variable {
+                                    name: "FLAGS".to_string(),
+                                    version: cur_ver,
+                                });
+                                // Record use-def for FLAGS (enables Jcc → producer trace)
+                                if let Some(&(def_block, def_inst)) =
+                                    version_def.get(&("FLAGS".to_string(), cur_ver))
+                                {
+                                    use_def.insert(
+                                        (block_id, inst_idx, op_idx),
+                                        (def_block, def_inst, cur_ver),
+                                    );
+                                    def_use
+                                        .entry((def_block, def_inst))
+                                        .or_default()
+                                        .push((block_id, inst_idx, op_idx));
+                                } else {
+                                    use_def.insert(
+                                        (block_id, inst_idx, op_idx),
+                                        (usize::MAX, usize::MAX, cur_ver),
+                                    );
+                                }
+                            }
+                        }
                     }
                     _ => {
                         ssa_operands.push(SSAOperand::Memory {
@@ -566,7 +620,7 @@ impl SSAConstructor {
 
             ssa_insts.push(SSAInstruction {
                 address: inst.address.0,
-                op: format!("{:?}", inst.op),
+                op: inst.op.name().to_string(),
                 operands: ssa_operands,
                 original_mnemonic: inst.original_mnemonic.clone().unwrap_or_default(),
                 destination_operand_idx: dest_idx,

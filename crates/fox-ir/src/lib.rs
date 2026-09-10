@@ -18,6 +18,47 @@ use fox_core::Address;
 use serde::{Deserialize, Serialize};
 
 /// IR operation opcode (architecture-neutral).
+/// Jump condition code for conditional branches (Jcc).
+///
+/// Preserves the semantic distinction between signed/unsigned comparisons
+/// and individual flag tests. Must not be collapsed into a generic "CondJump".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum JumpCondition {
+    /// JE/JZ — zero/equal
+    Equal,
+    /// JNE/JNZ — not zero/not equal
+    NotEqual,
+    /// JL/JNGE — signed less-than
+    SignedLess,
+    /// JLE/JNG — signed less-or-equal
+    SignedLessEqual,
+    /// JG/JNLE — signed greater-than
+    SignedGreater,
+    /// JGE/JNL — signed greater-or-equal
+    SignedGreaterEqual,
+    /// JB/JNAE/JC — unsigned less-than (carry)
+    UnsignedLess,
+    /// JBE/JNA — unsigned less-or-equal
+    UnsignedLessEqual,
+    /// JA/JNBE — unsigned greater-than
+    UnsignedGreater,
+    /// JAE/JNB/JNC — unsigned greater-or-equal (no carry)
+    UnsignedGreaterEqual,
+    /// JO — overflow
+    Overflow,
+    /// JNO — no overflow
+    NoOverflow,
+    /// JS — sign (negative)
+    Sign,
+    /// JNS — no sign (non-negative)
+    NoSign,
+    /// JP/JPE — parity even
+    Parity,
+    /// JNP/JPO — parity odd
+    NoParity,
+}
+
+/// L1 IR operation code.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IROp {
     // Data movement
@@ -55,7 +96,7 @@ pub enum IROp {
 
     // Control flow
     Jump,
-    CondJump,
+    CondJump { condition: JumpCondition },
     Call,
     Return,
     Nop,
@@ -75,6 +116,53 @@ pub enum IROp {
 
     // Unknown / untranslated
     Unknown(String),
+}
+
+impl IROp {
+    /// Return the operation name as a stable string (variant name only,
+    /// without field data). Used for SSA op strings and string matching.
+    pub fn name(&self) -> &'static str {
+        match self {
+            IROp::Mov => "Mov",
+            IROp::Load => "Load",
+            IROp::Store => "Store",
+            IROp::Push => "Push",
+            IROp::Pop => "Pop",
+            IROp::Lea => "Lea",
+            IROp::Add => "Add",
+            IROp::Sub => "Sub",
+            IROp::Mul => "Mul",
+            IROp::Div => "Div",
+            IROp::Mod => "Mod",
+            IROp::Neg => "Neg",
+            IROp::Inc => "Inc",
+            IROp::Dec => "Dec",
+            IROp::And => "And",
+            IROp::Or => "Or",
+            IROp::Xor => "Xor",
+            IROp::Not => "Not",
+            IROp::Shl => "Shl",
+            IROp::Shr => "Shr",
+            IROp::Sar => "Sar",
+            IROp::Rotl => "Rotl",
+            IROp::Rotr => "Rotr",
+            IROp::Cmp => "Cmp",
+            IROp::Test => "Test",
+            IROp::Jump => "Jump",
+            IROp::CondJump { .. } => "CondJump",
+            IROp::Call => "Call",
+            IROp::Return => "Return",
+            IROp::Nop => "Nop",
+            IROp::Halt => "Halt",
+            IROp::SetFlag => "SetFlag",
+            IROp::ClearFlag => "ClearFlag",
+            IROp::Enter => "Enter",
+            IROp::Leave => "Leave",
+            IROp::Int => "Int",
+            IROp::Syscall => "Syscall",
+            IROp::Unknown(_) => "Unknown",
+        }
+    }
 }
 
 /// Operand access mode.
@@ -202,9 +290,26 @@ impl IRInstruction {
     }
 
     /// All registers written (explicit + implicit).
+    ///
+    /// FLAGS is handled as a logical SSA state variable via `IROperand::Flags`,
+    /// so the zydis-reported implicit "eflags"/"rflags" register is excluded
+    /// here to prevent a dual model ("eflags" vs "FLAGS"). Instead, when
+    /// `writes_flags` is true, the canonical name "FLAGS" is emitted so that
+    /// phi placement and versioning use a single identity.
     pub fn all_writes(&self) -> Vec<&str> {
         let mut writes: Vec<&str> = self.writes_registers.iter().map(|s| s.as_str()).collect();
-        writes.extend(self.implicit_writes.iter().map(|s| s.as_str()));
+        writes.extend(
+            self.implicit_writes
+                .iter()
+                .filter(|s| {
+                    let n = s.as_str();
+                    n != "eflags" && n != "rflags" && n != "flags"
+                })
+                .map(|s| s.as_str()),
+        );
+        if self.writes_flags {
+            writes.push("FLAGS");
+        }
         writes
     }
 }

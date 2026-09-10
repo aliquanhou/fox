@@ -8,7 +8,7 @@
 //! - operand width and access mode
 //! - memory addressing details (base/index/scale/disp/effective_address)
 
-use crate::{IRInstruction, IROp, IROperand, OperandAccess};
+use crate::{IRInstruction, IROp, IROperand, JumpCondition, OperandAccess};
 use fox_core::{Address, Evidence, EvidenceKind};
 use fox_disasm::{Instruction, OperandKind};
 
@@ -140,6 +140,32 @@ impl IRTranslator {
         (reads, writes)
     }
 
+    /// Map x86/x64 Jcc mnemonic to JumpCondition.
+    ///
+    /// Returns None if the mnemonic is not a recognized conditional jump.
+    fn map_jump_condition(mnemonic: &str) -> Option<JumpCondition> {
+        use crate::JumpCondition::*;
+        Some(match mnemonic {
+            "je" | "jz" => Equal,
+            "jne" | "jnz" => NotEqual,
+            "jl" | "jnge" => SignedLess,
+            "jle" | "jng" => SignedLessEqual,
+            "jg" | "jnle" => SignedGreater,
+            "jge" | "jnl" => SignedGreaterEqual,
+            "jb" | "jnae" | "jc" => UnsignedLess,
+            "jbe" | "jna" => UnsignedLessEqual,
+            "ja" | "jnbe" => UnsignedGreater,
+            "jae" | "jnb" | "jnc" => UnsignedGreaterEqual,
+            "jo" => Overflow,
+            "jno" => NoOverflow,
+            "js" => Sign,
+            "jns" => NoSign,
+            "jp" | "jpe" => Parity,
+            "jnp" | "jpo" => NoParity,
+            _ => return None,
+        })
+    }
+
     /// Map x86/x64 mnemonic to IROp.
     fn map_mnemonic(mnemonic: &str) -> IROp {
         let m = mnemonic.to_lowercase();
@@ -189,8 +215,11 @@ impl IRTranslator {
             "enter" => IROp::Enter,
             "leave" => IROp::Leave,
 
-            // Conditional jumps map to CondJump
-            m if m.starts_with('j') && m != "jmp" && m.len() > 1 => IROp::CondJump,
+            // Conditional jumps map to CondJump with preserved condition code
+            m if m.starts_with('j') && m != "jmp" && m.len() > 1 => {
+                let condition = Self::map_jump_condition(m).unwrap_or(JumpCondition::NotEqual);
+                IROp::CondJump { condition }
+            }
 
             // Setcc
             m if m.starts_with("set") => IROp::SetFlag,
@@ -342,7 +371,30 @@ mod tests {
 
     #[test]
     fn test_map_conditional_jump() {
-        assert_eq!(IRTranslator::map_mnemonic("jz"), IROp::CondJump);
+        assert_eq!(
+            IRTranslator::map_mnemonic("jz"),
+            IROp::CondJump {
+                condition: JumpCondition::Equal
+            }
+        );
+        assert_eq!(
+            IRTranslator::map_mnemonic("jnz"),
+            IROp::CondJump {
+                condition: JumpCondition::NotEqual
+            }
+        );
+        assert_eq!(
+            IRTranslator::map_mnemonic("jl"),
+            IROp::CondJump {
+                condition: JumpCondition::SignedLess
+            }
+        );
+        assert_eq!(
+            IRTranslator::map_mnemonic("jb"),
+            IROp::CondJump {
+                condition: JumpCondition::UnsignedLess
+            }
+        );
         assert_eq!(IRTranslator::map_mnemonic("jmp"), IROp::Jump);
     }
 
