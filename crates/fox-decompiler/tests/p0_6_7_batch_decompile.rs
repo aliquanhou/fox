@@ -1,13 +1,14 @@
 //! P0-6.7: Batch decompilation of all NtcMach.exe functions.
 //! Produces pseudocode for every function and computes real recoverability stats.
+#![allow(warnings)]
 
 use fox_analysis::analyze_binary;
 use fox_binary::Binary;
-use fox_decompiler::{
-    emit_c_like, recover_control_structures, CLikeEmitter, EmitterConfig,
-    StructuredIRBuilder, StructuredIRBudget,
-};
 use fox_decompiler::expression::ExpressionRecovery;
+use fox_decompiler::{
+    emit_c_like, recover_control_structures, CLikeEmitter, EmitterConfig, StructuredIRBudget,
+    StructuredIRBuilder,
+};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -83,7 +84,12 @@ fn batch_decompile_all_ntcmach_functions() {
         };
 
         if idx % 50 == 0 {
-            println!("  Processing function {}/{} (0x{:X})...", idx + 1, total_functions, addr);
+            println!(
+                "  Processing function {}/{} (0x{:X})...",
+                idx + 1,
+                total_functions,
+                addr
+            );
         }
 
         let func_result = process_single_function(&result, addr, &name);
@@ -96,13 +102,27 @@ fn batch_decompile_all_ntcmach_functions() {
 
         total_output_chars += func_result.output_chars;
         total_statements += func_result.statements;
-        if func_result.if_count > 0 { functions_with_if += 1; }
-        if func_result.guard_count > 0 { functions_with_guard += 1; }
-        if func_result.unknown_count > 0 { functions_with_unknown += 1; }
-        if func_result.has_return { functions_with_return += 1; }
-        if func_result.has_call { functions_with_call += 1; }
-        if func_result.budget_exhausted { functions_budget_exhausted += 1; }
-        if func_result.output_chars < 50 { functions_empty_output += 1; }
+        if func_result.if_count > 0 {
+            functions_with_if += 1;
+        }
+        if func_result.guard_count > 0 {
+            functions_with_guard += 1;
+        }
+        if func_result.unknown_count > 0 {
+            functions_with_unknown += 1;
+        }
+        if func_result.has_return {
+            functions_with_return += 1;
+        }
+        if func_result.has_call {
+            functions_with_call += 1;
+        }
+        if func_result.budget_exhausted {
+            functions_budget_exhausted += 1;
+        }
+        if func_result.output_chars < 50 {
+            functions_empty_output += 1;
+        }
 
         results.push(func_result);
     }
@@ -114,24 +134,70 @@ fn batch_decompile_all_ntcmach_functions() {
     println!("");
     println!("--- Overall Status ---");
     println!("Total functions:    {}", total_functions);
-    println!("OK (readable):      {} ({:.1}%)", ok_count, ok_count as f64 / total_functions as f64 * 100.0);
-    println!("Degraded:           {} ({:.1}%)", degraded_count, degraded_count as f64 / total_functions as f64 * 100.0);
-    println!("Failed:             {} ({:.1}%)", failed_count, failed_count as f64 / total_functions as f64 * 100.0);
+    println!(
+        "OK (readable):      {} ({:.1}%)",
+        ok_count,
+        ok_count as f64 / total_functions as f64 * 100.0
+    );
+    println!(
+        "Degraded:           {} ({:.1}%)",
+        degraded_count,
+        degraded_count as f64 / total_functions as f64 * 100.0
+    );
+    println!(
+        "Failed:             {} ({:.1}%)",
+        failed_count,
+        failed_count as f64 / total_functions as f64 * 100.0
+    );
     println!("");
     println!("--- Output Volume ---");
     println!("Total statements:   {}", total_statements);
     println!("Total output chars: {}", total_output_chars);
-    println!("Avg statements/fn:  {:.1}", total_statements as f64 / total_functions as f64);
-    println!("Avg output chars/fn:{:.1}", total_output_chars as f64 / total_functions as f64);
+    println!(
+        "Avg statements/fn:  {:.1}",
+        total_statements as f64 / total_functions as f64
+    );
+    println!(
+        "Avg output chars/fn:{:.1}",
+        total_output_chars as f64 / total_functions as f64
+    );
     println!("");
     println!("--- Feature Coverage ---");
-    println!("Functions with if:        {} ({:.1}%)", functions_with_if, functions_with_if as f64 / total_functions as f64 * 100.0);
-    println!("Functions with guard:     {} ({:.1}%)", functions_with_guard, functions_with_guard as f64 / total_functions as f64 * 100.0);
-    println!("Functions with unknown:   {} ({:.1}%)", functions_with_unknown, functions_with_unknown as f64 / total_functions as f64 * 100.0);
-    println!("Functions with return:    {} ({:.1}%)", functions_with_return, functions_with_return as f64 / total_functions as f64 * 100.0);
-    println!("Functions with call:      {} ({:.1}%)", functions_with_call, functions_with_call as f64 / total_functions as f64 * 100.0);
-    println!("Budget exhausted:         {} ({:.1}%)", functions_budget_exhausted, functions_budget_exhausted as f64 / total_functions as f64 * 100.0);
-    println!("Empty output (<50 chars): {} ({:.1}%)", functions_empty_output, functions_empty_output as f64 / total_functions as f64 * 100.0);
+    println!(
+        "Functions with if:        {} ({:.1}%)",
+        functions_with_if,
+        functions_with_if as f64 / total_functions as f64 * 100.0
+    );
+    println!(
+        "Functions with guard:     {} ({:.1}%)",
+        functions_with_guard,
+        functions_with_guard as f64 / total_functions as f64 * 100.0
+    );
+    println!(
+        "Functions with unknown:   {} ({:.1}%)",
+        functions_with_unknown,
+        functions_with_unknown as f64 / total_functions as f64 * 100.0
+    );
+    println!(
+        "Functions with return:    {} ({:.1}%)",
+        functions_with_return,
+        functions_with_return as f64 / total_functions as f64 * 100.0
+    );
+    println!(
+        "Functions with call:      {} ({:.1}%)",
+        functions_with_call,
+        functions_with_call as f64 / total_functions as f64 * 100.0
+    );
+    println!(
+        "Budget exhausted:         {} ({:.1}%)",
+        functions_budget_exhausted,
+        functions_budget_exhausted as f64 / total_functions as f64 * 100.0
+    );
+    println!(
+        "Empty output (<50 chars): {} ({:.1}%)",
+        functions_empty_output,
+        functions_empty_output as f64 / total_functions as f64 * 100.0
+    );
     println!("");
 
     // Top 10 largest functions by output
@@ -139,29 +205,53 @@ fn batch_decompile_all_ntcmach_functions() {
     let mut sorted: Vec<&FunctionResult> = results.iter().collect();
     sorted.sort_by(|a, b| b.output_chars.cmp(&a.output_chars));
     for (i, r) in sorted.iter().take(10).enumerate() {
-        println!("  {}. 0x{:X} {}: {} chars, {} stmts, {} blocks, {} if, {} guard, {} unknown",
-            i + 1, r.address, r.name, r.output_chars, r.statements,
-            r.cfg_blocks, r.if_count, r.guard_count, r.unknown_count);
+        println!(
+            "  {}. 0x{:X} {}: {} chars, {} stmts, {} blocks, {} if, {} guard, {} unknown",
+            i + 1,
+            r.address,
+            r.name,
+            r.output_chars,
+            r.statements,
+            r.cfg_blocks,
+            r.if_count,
+            r.guard_count,
+            r.unknown_count
+        );
     }
     println!("");
 
     // Functions with most unknown
     println!("--- Top 10 Functions by Unknown Count ---");
-    let mut sorted_unknown: Vec<&FunctionResult> = results.iter()
-        .filter(|r| r.unknown_count > 0)
-        .collect();
+    let mut sorted_unknown: Vec<&FunctionResult> =
+        results.iter().filter(|r| r.unknown_count > 0).collect();
     sorted_unknown.sort_by(|a, b| b.unknown_count.cmp(&a.unknown_count));
     for (i, r) in sorted_unknown.iter().take(10).enumerate() {
-        println!("  {}. 0x{:X} {}: {} unknown, {} if, {} guard, {} blocks",
-            i + 1, r.address, r.name, r.unknown_count, r.if_count, r.guard_count, r.cfg_blocks);
+        println!(
+            "  {}. 0x{:X} {}: {} unknown, {} if, {} guard, {} blocks",
+            i + 1,
+            r.address,
+            r.name,
+            r.unknown_count,
+            r.if_count,
+            r.guard_count,
+            r.cfg_blocks
+        );
     }
     println!("");
 
     // Failed functions
     if failed_count > 0 {
         println!("--- Failed Functions ---");
-        for r in results.iter().filter(|r| r.status == FunctionStatus::Failed) {
-            println!("  0x{:X} {}: {}", r.address, r.name, r.error.as_deref().unwrap_or("unknown"));
+        for r in results
+            .iter()
+            .filter(|r| r.status == FunctionStatus::Failed)
+        {
+            println!(
+                "  0x{:X} {}: {}",
+                r.address,
+                r.name,
+                r.error.as_deref().unwrap_or("unknown")
+            );
         }
         println!("");
     }
@@ -169,10 +259,17 @@ fn batch_decompile_all_ntcmach_functions() {
     // Degraded functions (empty or only unknown)
     println!("--- Degraded Functions Sample (first 10) ---");
     let mut degraded_shown = 0;
-    for r in results.iter().filter(|r| r.status == FunctionStatus::Degraded) {
-        if degraded_shown >= 10 { break; }
-        println!("  0x{:X} {}: {} chars, {} stmts, {} unknown, blocks={}",
-            r.address, r.name, r.output_chars, r.statements, r.unknown_count, r.cfg_blocks);
+    for r in results
+        .iter()
+        .filter(|r| r.status == FunctionStatus::Degraded)
+    {
+        if degraded_shown >= 10 {
+            break;
+        }
+        println!(
+            "  0x{:X} {}: {} chars, {} stmts, {} unknown, blocks={}",
+            r.address, r.name, r.output_chars, r.statements, r.unknown_count, r.cfg_blocks
+        );
         degraded_shown += 1;
     }
     println!("");
@@ -180,7 +277,10 @@ fn batch_decompile_all_ntcmach_functions() {
     // Assertions
     assert!(ok_count > 0, "should have at least some OK functions");
     assert!(total_output_chars > 0, "should produce some output");
-    println!("PASS: Batch decompilation completed for {} functions", total_functions);
+    println!(
+        "PASS: Batch decompilation completed for {} functions",
+        total_functions
+    );
 }
 
 fn process_single_function(
@@ -188,40 +288,84 @@ fn process_single_function(
     addr: u64,
     name: &str,
 ) -> FunctionResult {
-    let func_cfg = match result.cfg.function_cfgs.iter()
-        .find(|f| f.function_address.0 == addr) {
+    let func_cfg = match result
+        .cfg
+        .function_cfgs
+        .iter()
+        .find(|f| f.function_address.0 == addr)
+    {
         Some(f) => f,
-        None => return FunctionResult {
-            address: addr, name: name.to_string(), cfg_blocks: 0, ssa_instrs: 0,
-            control_structures: 0, if_count: 0, guard_count: 0, unknown_count: 0,
-            statements: 0, output_chars: 0, output_lines: 0, has_return: false,
-            has_call: false, has_assign: false, budget_exhausted: false,
-            status: FunctionStatus::Failed, error: Some("CFG not found".to_string()),
-        },
+        None => {
+            return FunctionResult {
+                address: addr,
+                name: name.to_string(),
+                cfg_blocks: 0,
+                ssa_instrs: 0,
+                control_structures: 0,
+                if_count: 0,
+                guard_count: 0,
+                unknown_count: 0,
+                statements: 0,
+                output_chars: 0,
+                output_lines: 0,
+                has_return: false,
+                has_call: false,
+                has_assign: false,
+                budget_exhausted: false,
+                status: FunctionStatus::Failed,
+                error: Some("CFG not found".to_string()),
+            }
+        }
     };
 
     let ctx = match result.pipeline.function_analysis.get(&addr) {
         Some(c) => c,
-        None => return FunctionResult {
-            address: addr, name: name.to_string(),
-            cfg_blocks: func_cfg.blocks.len(), ssa_instrs: 0,
-            control_structures: 0, if_count: 0, guard_count: 0, unknown_count: 0,
-            statements: 0, output_chars: 0, output_lines: 0, has_return: false,
-            has_call: false, has_assign: false, budget_exhausted: false,
-            status: FunctionStatus::Failed, error: Some("No SSA analysis".to_string()),
-        },
+        None => {
+            return FunctionResult {
+                address: addr,
+                name: name.to_string(),
+                cfg_blocks: func_cfg.blocks.len(),
+                ssa_instrs: 0,
+                control_structures: 0,
+                if_count: 0,
+                guard_count: 0,
+                unknown_count: 0,
+                statements: 0,
+                output_chars: 0,
+                output_lines: 0,
+                has_return: false,
+                has_call: false,
+                has_assign: false,
+                budget_exhausted: false,
+                status: FunctionStatus::Failed,
+                error: Some("No SSA analysis".to_string()),
+            }
+        }
     };
 
     let ssa = match ctx.ssa.as_ref() {
         Some(s) => s,
-        None => return FunctionResult {
-            address: addr, name: name.to_string(),
-            cfg_blocks: func_cfg.blocks.len(), ssa_instrs: 0,
-            control_structures: 0, if_count: 0, guard_count: 0, unknown_count: 0,
-            statements: 0, output_chars: 0, output_lines: 0, has_return: false,
-            has_call: false, has_assign: false, budget_exhausted: false,
-            status: FunctionStatus::Failed, error: Some("SSA not available".to_string()),
-        },
+        None => {
+            return FunctionResult {
+                address: addr,
+                name: name.to_string(),
+                cfg_blocks: func_cfg.blocks.len(),
+                ssa_instrs: 0,
+                control_structures: 0,
+                if_count: 0,
+                guard_count: 0,
+                unknown_count: 0,
+                statements: 0,
+                output_chars: 0,
+                output_lines: 0,
+                has_return: false,
+                has_call: false,
+                has_assign: false,
+                budget_exhausted: false,
+                status: FunctionStatus::Failed,
+                error: Some("SSA not available".to_string()),
+            }
+        }
     };
 
     let ssa_instrs: usize = ssa.basic_blocks.iter().map(|b| b.instructions.len()).sum();
@@ -244,31 +388,79 @@ fn process_single_function(
     let mut has_call = false;
     let mut has_assign = false;
 
-    fn count_stmts(stmts: &[fox_decompiler::Statement],
-        if_count: &mut usize, guard_count: &mut usize, unknown_count: &mut usize,
-        has_return: &mut bool, has_call: &mut bool, has_assign: &mut bool)
-    {
+    fn count_stmts(
+        stmts: &[fox_decompiler::Statement],
+        if_count: &mut usize,
+        guard_count: &mut usize,
+        unknown_count: &mut usize,
+        has_return: &mut bool,
+        has_call: &mut bool,
+        has_assign: &mut bool,
+    ) {
         for s in stmts {
             match s {
-                fox_decompiler::Statement::If { then_body, else_body, .. } => {
+                fox_decompiler::Statement::If {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
                     *if_count += 1;
-                    count_stmts(then_body, if_count, guard_count, unknown_count, has_return, has_call, has_assign);
-                    count_stmts(else_body, if_count, guard_count, unknown_count, has_return, has_call, has_assign);
+                    count_stmts(
+                        then_body,
+                        if_count,
+                        guard_count,
+                        unknown_count,
+                        has_return,
+                        has_call,
+                        has_assign,
+                    );
+                    count_stmts(
+                        else_body,
+                        if_count,
+                        guard_count,
+                        unknown_count,
+                        has_return,
+                        has_call,
+                        has_assign,
+                    );
                 }
                 fox_decompiler::Statement::GuardClause { body, .. } => {
                     *guard_count += 1;
-                    count_stmts(body, if_count, guard_count, unknown_count, has_return, has_call, has_assign);
+                    count_stmts(
+                        body,
+                        if_count,
+                        guard_count,
+                        unknown_count,
+                        has_return,
+                        has_call,
+                        has_assign,
+                    );
                 }
-                fox_decompiler::Statement::Unknown { .. } => { *unknown_count += 1; }
-                fox_decompiler::Statement::Return { .. } => { *has_return = true; }
-                fox_decompiler::Statement::CallStmt { .. } => { *has_call = true; }
-                fox_decompiler::Statement::Assign { .. } => { *has_assign = true; }
+                fox_decompiler::Statement::Unknown { .. } => {
+                    *unknown_count += 1;
+                }
+                fox_decompiler::Statement::Return { .. } => {
+                    *has_return = true;
+                }
+                fox_decompiler::Statement::CallStmt { .. } => {
+                    *has_call = true;
+                }
+                fox_decompiler::Statement::Assign { .. } => {
+                    *has_assign = true;
+                }
                 fox_decompiler::Statement::PhiAssign { .. } => {}
             }
         }
     }
-    count_stmts(&func.statements, &mut if_count, &mut guard_count, &mut unknown_count,
-        &mut has_return, &mut has_call, &mut has_assign);
+    count_stmts(
+        &func.statements,
+        &mut if_count,
+        &mut guard_count,
+        &mut unknown_count,
+        &mut has_return,
+        &mut has_call,
+        &mut has_assign,
+    );
 
     // Emit
     let emitter = CLikeEmitter::with_config(EmitterConfig {

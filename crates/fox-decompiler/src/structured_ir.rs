@@ -231,8 +231,6 @@ impl StructuredIRBuilder {
         // Phase 1: Build flat statement list per CFG block
         let mut block_statements: std::collections::HashMap<usize, Vec<Statement>> =
             std::collections::HashMap::new();
-        let mut processed_blocks: std::collections::HashSet<usize> =
-            std::collections::HashSet::new();
 
         for (block_id, cfg_block) in cfg.blocks.iter().enumerate() {
             let mut stmts = Vec::new();
@@ -347,8 +345,12 @@ impl StructuredIRBuilder {
             }
         }
 
-        // Phase 2: Lift control structures, nesting block statements
-        let mut top_level: Vec<Statement> = Vec::new();
+        // Phase 2: Build control structure map (branch_block -> Statement).
+        // Do NOT push to top_level yet — we need BFS execution order (P0-6.8 fix).
+        let mut branch_to_structure: std::collections::HashMap<usize, Statement> =
+            std::collections::HashMap::new();
+        let mut structure_body_blocks: std::collections::HashSet<usize> =
+            std::collections::HashSet::new();
         let cs_count = control_structures.len();
 
         for cs in &control_structures {
@@ -361,64 +363,136 @@ impl StructuredIRBuilder {
                         self.take_block_statements(&mut block_statements, if_else.then_block);
                     let else_body =
                         self.take_block_statements(&mut block_statements, if_else.else_block);
-                    processed_blocks.insert(if_else.then_block);
-                    processed_blocks.insert(if_else.else_block);
+                    structure_body_blocks.insert(if_else.then_block);
+                    structure_body_blocks.insert(if_else.else_block);
 
                     if self.budget.allocate() {
-                        top_level.push(Statement::If {
-                            condition: if_else.condition.clone(),
-                            then_body,
-                            else_body,
-                            merge_block: if_else.merge_block,
-                            evidence: Self::structure_evidence(
-                                &if_else.evidence,
-                                "If/Else with bounded common merge",
-                            ),
-                        });
+                        branch_to_structure.insert(
+                            if_else.branch_block,
+                            Statement::If {
+                                condition: if_else.condition.clone(),
+                                then_body,
+                                else_body,
+                                merge_block: if_else.merge_block,
+                                evidence: Self::structure_evidence(
+                                    &if_else.evidence,
+                                    "If/Else with bounded common merge",
+                                ),
+                            },
+                        );
                     }
                 }
                 ControlStructure::GuardClause(guard) => {
                     let body = self.take_block_statements(&mut block_statements, guard.body_block);
                     let return_value = self.extract_return_from_block(cfg, ssa, guard.return_block);
-                    processed_blocks.insert(guard.body_block);
-                    processed_blocks.insert(guard.return_block);
+                    structure_body_blocks.insert(guard.body_block);
+                    structure_body_blocks.insert(guard.return_block);
 
                     if self.budget.allocate() {
-                        top_level.push(Statement::GuardClause {
-                            condition: guard.condition.clone(),
-                            body,
-                            return_value,
-                            evidence: Self::structure_evidence(
-                                &guard.evidence,
-                                "Guard clause / early return (immediate CFG Return edge)",
-                            ),
-                        });
+                        branch_to_structure.insert(
+                            guard.branch_block,
+                            Statement::GuardClause {
+                                condition: guard.condition.clone(),
+                                body,
+                                return_value,
+                                evidence: Self::structure_evidence(
+                                    &guard.evidence,
+                                    "Guard clause / early return (immediate CFG Return edge)",
+                                ),
+                            },
+                        );
                     }
                 }
                 ControlStructure::Unknown(unknown) => {
                     let goto_target = Self::find_goto_target(cfg, unknown.branch_block);
 
                     if self.budget.allocate() {
-                        top_level.push(Statement::Unknown {
-                            reason: unknown.reason.clone(),
-                            condition: Some(unknown.condition.clone()),
-                            goto_target,
-                            evidence: Self::structure_evidence(
-                                &unknown.evidence,
-                                &format!("Unstructured control flow: {}", unknown.reason),
-                            ),
-                        });
+                        branch_to_structure.insert(
+                            unknown.branch_block,
+                            Statement::Unknown {
+                                reason: unknown.reason.clone(),
+                                condition: Some(unknown.condition.clone()),
+                                goto_target,
+                                evidence: Self::structure_evidence(
+                                    &unknown.evidence,
+                                    &format!("Unstructured control flow: {}", unknown.reason),
+                                ),
+                            },
+                        );
                     }
                 }
             }
         }
 
-        // Phase 3: Add remaining block statements in address order
+        // Build address -> block_id map for BFS traversal
+        let mut address_to_block: std::collections::HashMap<u64, usize> =
+            std::collections::HashMap::new();
+        for (id, block) in cfg.blocks.iter().enumerate() {
+            address_to_block.insert(block.start_address.0, id);
+        }
+
+        // Phase 3: BFS from entry block (block 0), output in execution order.
+        // P0-6.8 fix: previously control structures were output before entry block code.
+        let mut top_level: Vec<Statement> = Vec::new();
+        let mut visited: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut queue: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+
+        if !cfg.blocks.is_empty() {
+            queue.push_back(0);
+        }
+
+        while let Some(block_id) = queue.pop_front() {
+            if visited.contains(&block_id) {
+                continue;
+            }
+            visited.insert(block_id);
+
+            if let Some(struct_stmt) = branch_to_structure.get(&block_id) {
+                // Branch block: output its own flat statements first (CMP/TEST etc.),
+                // then output the control structure (if/guard/unknown from Jcc).
+                if let Some(stmts) = block_statements.get(&block_id) {
+                    for s in stmts {
+                        if self.budget.allocate() {
+                            top_level.push(s.clone());
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                top_level.push(struct_stmt.clone());
+            } else if !structure_body_blocks.contains(&block_id) {
+                // Normal block: output its flat statements
+                if let Some(stmts) = block_statements.get(&block_id) {
+                    for s in stmts {
+                        if self.budget.allocate() {
+                            top_level.push(s.clone());
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Add successors to BFS queue
+            if let Some(block) = cfg.blocks.get(block_id) {
+                for edge in &block.successors {
+                    if let Some(target_addr) = edge.target_address {
+                        if let Some(&target_id) = address_to_block.get(&target_addr) {
+                            if !visited.contains(&target_id) {
+                                queue.push_back(target_id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Phase 4: Append unreachable blocks (not visited, not body blocks) in address order
         let mut remaining_blocks: Vec<(usize, u64)> = cfg
             .blocks
             .iter()
             .enumerate()
-            .filter(|(id, _)| !processed_blocks.contains(id))
+            .filter(|(id, _)| !visited.contains(id) && !structure_body_blocks.contains(id))
             .map(|(id, b)| (id, b.start_address.0))
             .collect();
         remaining_blocks.sort_by_key(|(_, addr)| *addr);
