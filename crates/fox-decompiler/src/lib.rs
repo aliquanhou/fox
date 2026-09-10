@@ -4,9 +4,11 @@
 //! P0-6.3A: Condition Recovery (CMP/TEST + Jcc → structured condition).
 //! P0-6.4B: Control Structure Recovery (If/Else + Guard Clause / Early Return).
 //! P0-6.6A: Structured IR (aggregate analysis → DecompilerFunction → Statements).
+//! P0-6.6B: C-like Emitter (Structured IR → human-readable pseudocode).
 
 pub mod condition;
 pub mod control_structure;
+pub mod emitter;
 pub mod expression;
 pub mod structured_ir;
 
@@ -17,6 +19,7 @@ pub use control_structure::{
     recover_control_structures, ControlStructure, GuardClause, IfElse, StructureEvidence,
     UnknownBranch,
 };
+pub use emitter::{emit_c_like, emit_c_like_clean, CLikeEmitter, EmitterConfig};
 pub use expression::{BinaryOp, CallTarget, Expression, ExpressionRecovery, PhiIncoming, UnaryOp};
 pub use structured_ir::{
     AssignTarget, DecompilerFunction, FunctionEvidence, Statement, StatementEvidence,
