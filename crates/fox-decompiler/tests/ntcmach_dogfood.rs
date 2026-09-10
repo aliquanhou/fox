@@ -9,7 +9,11 @@
 
 use fox_analysis::analyze_binary;
 use fox_binary::Binary;
-use fox_decompiler::{recover_all_conditions, ConditionRecovery, Expression, ExpressionRecovery};
+use fox_core::Address;
+use fox_decompiler::{
+    recover_all_conditions, recover_control_structures, ConditionRecovery, ControlStructure,
+    Expression, ExpressionRecovery,
+};
 use std::path::PathBuf;
 
 fn ntcmach_path() -> PathBuf {
@@ -226,4 +230,141 @@ fn ntcmach_condition_recovery_dogfood_0x401390() {
 
     println!();
     println!("P0-6.3A Condition Recovery dogfood PASSED");
+}
+
+// ---------------------------------------------------------------------------
+// P0-6.4B: Control Structure Recovery Dogfood — NtcMach 0x41F000
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ntcmach_control_structure_recovery_dogfood_0x41f000() {
+    let path = ntcmach_path();
+    let data = std::fs::read(&path).expect("read NtcMach.exe");
+    let binary = Binary::load(data).expect("parse NtcMach.exe");
+    let result = analyze_binary(&binary).expect("analyze NtcMach.exe");
+
+    let target_addr = Address(0x41F000);
+
+    // Get CFG for 0x41F000
+    let func_cfg = result
+        .cfg
+        .function_cfgs
+        .iter()
+        .find(|f| f.function_address == target_addr)
+        .expect("function 0x41F000 CFG not found");
+
+    // Get SSA for 0x41F000
+    let ctx = result
+        .pipeline
+        .function_analysis
+        .get(&0x41F000u64)
+        .expect("function 0x41F000 not found in pipeline");
+    let ssa = ctx.ssa.as_ref().expect("SSA not built for 0x41F000");
+
+    println!("=== P0-6.4B Control Structure Recovery Dogfood: 0x41F000 ===");
+    println!("CFG blocks: {}", func_cfg.blocks.len());
+    println!("SSA blocks: {}", ssa.basic_blocks.len());
+
+    // Recover control structures
+    let structures = recover_control_structures(func_cfg, ssa);
+    println!("Total control structures: {}", structures.len());
+
+    let mut if_else_count = 0;
+    let mut guard_count = 0;
+    let mut unknown_count = 0;
+
+    for s in &structures {
+        match s {
+            ControlStructure::IfElse(ie) => {
+                if_else_count += 1;
+                println!(
+                    "  IF/ELSE @ 0x{:X}: then=block[{}] else=block[{}] merge={:?}",
+                    ie.evidence.branch_address, ie.then_block, ie.else_block, ie.merge_block
+                );
+                if let ConditionRecovery::Resolved(c) = &ie.condition {
+                    println!("    condition: {}", c);
+                }
+            }
+            ControlStructure::GuardClause(gc) => {
+                guard_count += 1;
+                println!(
+                    "  GUARD_CLAUSE @ 0x{:X}: body=block[{}] return=block[{}] ({} branch)",
+                    gc.evidence.branch_address,
+                    gc.body_block,
+                    gc.return_block,
+                    if gc.return_is_taken_branch {
+                        "taken"
+                    } else {
+                        "fallthrough"
+                    }
+                );
+                if let ConditionRecovery::Resolved(c) = &gc.condition {
+                    println!("    condition: {}", c);
+                }
+            }
+            ControlStructure::Unknown(ub) => {
+                unknown_count += 1;
+                println!(
+                    "  UNKNOWN @ 0x{:X}: {}",
+                    ub.evidence.branch_address, ub.reason
+                );
+            }
+        }
+    }
+
+    println!();
+    println!("If/Else: {}", if_else_count);
+    println!("GuardClause: {}", guard_count);
+    println!("Unknown: {}", unknown_count);
+
+    // 0x41F000 has 2 test+jz guard clauses (both jump to same error block)
+    // Expected: at least 2 GuardClause structures
+    assert!(
+        guard_count >= 2,
+        "expected at least 2 GuardClause structures in 0x41F000, got {}",
+        guard_count
+    );
+
+    // Verify the two specific guard clause branch addresses
+    let guard_addrs: Vec<u64> = structures
+        .iter()
+        .filter_map(|s| match s {
+            ControlStructure::GuardClause(gc) => Some(gc.evidence.branch_address),
+            _ => None,
+        })
+        .collect();
+
+    assert!(
+        guard_addrs.contains(&0x41F010),
+        "expected guard clause at 0x41F010 (first test+jz), got {:?}",
+        guard_addrs
+    );
+    assert!(
+        guard_addrs.contains(&0x41F020),
+        "expected guard clause at 0x41F020 (second test+jz), got {:?}",
+        guard_addrs
+    );
+
+    // Verify evidence traceability
+    for s in &structures {
+        match s {
+            ControlStructure::GuardClause(gc) => {
+                assert!(gc.evidence.branch_address > 0);
+                assert!(gc.evidence.true_target_address > 0);
+                assert!(gc.evidence.false_target_address > 0);
+                assert!(gc.evidence.return_edge_detected);
+                assert!(!gc.evidence.detection_reason.is_empty());
+            }
+            ControlStructure::IfElse(ie) => {
+                assert!(ie.evidence.branch_address > 0);
+                assert!(ie.evidence.merge_address.is_some());
+            }
+            ControlStructure::Unknown(ub) => {
+                assert!(!ub.reason.is_empty());
+            }
+        }
+    }
+
+    println!();
+    println!("P0-6.4B Control Structure Recovery dogfood PASSED");
 }
