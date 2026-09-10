@@ -7,7 +7,9 @@ description = "FOX decompiler: IR to readable source"
 
 [dependencies]
 fox-core.workspace = true
+fox-binary.workspace = true
 fox-ir.workspace = true
 fox-analysis.workspace = true
+serde.workspace = true
 anyhow.workspace = true
 log.workspace = true

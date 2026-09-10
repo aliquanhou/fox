@@ -276,9 +276,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "fox-analysis",
+ "fox-binary",
  "fox-core",
  "fox-ir",
  "log",
+ "serde",
 ]
 
 [[package]]
