@@ -23,7 +23,11 @@ pub mod type_recovery;
 pub mod value_flow;
 
 use fox_binary::Binary;
-use fox_core::{Address, Confidence, Evidence, EvidenceKind, FoxError, FoxResult, WithEvidence};
+use fox_core::{
+    adjudicate_reality, Address, BodyReality, BoundaryReality, ClaimStrength, ClaimType,
+    Confidence, Evidence, EvidenceClaim, EvidenceKind, FoxError, FoxResult, FunctionRange,
+    FunctionReality, IdentityReality, RealityStatus, WithEvidence,
+};
 use fox_disasm::create_disassembler;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -131,6 +135,10 @@ pub struct Function {
     pub confidence_tier: FunctionConfidence,
     /// P0-3.1: Function body validation result
     pub validation: FunctionValidation,
+    /// P0-5.6B: Multi-dimensional function reality (optional, non-breaking).
+    /// When None, consumers should fall back to confidence_tier.
+    #[serde(default)]
+    pub reality: Option<FunctionReality>,
 }
 
 impl Function {
@@ -145,6 +153,7 @@ impl Function {
             called_by: Vec::new(),
             confidence_tier: FunctionConfidence::Unknown,
             validation: FunctionValidation::default(),
+            reality: None,
         }
     }
 }
@@ -254,6 +263,14 @@ impl FunctionDiscovery {
         for entry in &mut result {
             entry.value.confidence_tier = FunctionConfidence::from_confidence(entry.confidence);
         }
+
+        // Phase 7: Build Function Reality (P0-5.6B)
+        // Multi-dimensional reality: Start / Body / End / Identity.
+        // Does NOT modify confidence_tier or discovery algorithm.
+        for entry in &mut result {
+            entry.value.reality = Some(Self::build_function_reality(entry));
+        }
+
         result.sort_by(|a, b| {
             b.confidence
                 .0
@@ -262,6 +279,148 @@ impl FunctionDiscovery {
         });
 
         result
+    }
+
+    /// P0-5.6B: Build multi-dimensional Function Reality from existing Evidence + Claims.
+    ///
+    /// This does NOT modify discovery, confidence, or weights.
+    /// It only constructs a Reality view from the evidence already collected.
+    ///
+    /// Flow: Evidence → Claims → Aggregation → Adjudication → RealityStatus
+    fn build_function_reality(entry: &WithEvidence<Function>) -> FunctionReality {
+        let claims = entry.evidence.claims();
+        let addr = entry.value.address.0;
+
+        // --- Start Reality ---
+        let start_positive: Vec<EvidenceClaim> = claims
+            .iter()
+            .filter(|c| {
+                c.claim_type == ClaimType::FunctionStart && c.strength != ClaimStrength::Negative
+            })
+            .cloned()
+            .collect();
+        let start_negative: Vec<EvidenceClaim> = claims
+            .iter()
+            .filter(|c| {
+                c.claim_type == ClaimType::FunctionStart && c.strength == ClaimStrength::Negative
+            })
+            .cloned()
+            .collect();
+        let (start_status, start_contradictions) =
+            adjudicate_reality(&start_positive, &start_negative);
+        let start = BoundaryReality {
+            address: Some(addr),
+            status: start_status,
+            confidence: entry.confidence,
+            positive_claims: start_positive,
+            negative_claims: start_negative,
+            contradictions: start_contradictions,
+        };
+
+        // --- Body Reality ---
+        let body_positive: Vec<EvidenceClaim> = claims
+            .iter()
+            .filter(|c| {
+                c.claim_type == ClaimType::FunctionBody && c.strength != ClaimStrength::Negative
+            })
+            .cloned()
+            .collect();
+        let body_negative: Vec<EvidenceClaim> = claims
+            .iter()
+            .filter(|c| {
+                c.claim_type == ClaimType::FunctionBody && c.strength == ClaimStrength::Negative
+            })
+            .cloned()
+            .collect();
+        let (body_status, body_contradictions) = adjudicate_reality(&body_positive, &body_negative);
+        let body = BodyReality {
+            instruction_count: entry.value.validation.instruction_count,
+            basic_block_count: entry.value.basic_blocks.len(),
+            termination_kind: format!("{:?}", entry.value.validation.termination_kind),
+            status: body_status,
+            confidence: entry.confidence,
+            positive_claims: body_positive,
+            negative_claims: body_negative,
+            contradictions: body_contradictions,
+        };
+
+        // --- End Reality ---
+        let end_positive: Vec<EvidenceClaim> = claims
+            .iter()
+            .filter(|c| {
+                c.claim_type == ClaimType::FunctionEnd && c.strength != ClaimStrength::Negative
+            })
+            .cloned()
+            .collect();
+        let end_negative: Vec<EvidenceClaim> = claims
+            .iter()
+            .filter(|c| {
+                c.claim_type == ClaimType::FunctionEnd && c.strength == ClaimStrength::Negative
+            })
+            .cloned()
+            .collect();
+        let (end_status, end_contradictions) = adjudicate_reality(&end_positive, &end_negative);
+
+        // End address: prefer precise claim subject, then validation.estimated_end,
+        // then fall back to end_address (from .pdata).
+        // Observed End ≠ Estimated End ≠ Confirmed End — estimated_end is marked
+        // as Contextual/Probable, not Confirmed.
+        let end_addr = end_positive
+            .iter()
+            .find_map(|c| match c.subject {
+                fox_core::ClaimSubject::Address(a) => Some(a),
+                _ => None,
+            })
+            .or_else(|| entry.value.validation.estimated_end)
+            .or_else(|| entry.value.end_address.map(|a| a.0));
+
+        let end = BoundaryReality {
+            address: end_addr,
+            status: end_status,
+            confidence: entry.confidence,
+            positive_claims: end_positive,
+            negative_claims: end_negative,
+            contradictions: end_contradictions,
+        };
+
+        // --- Identity Reality (from existing identity info) ---
+        // Identity is read from FunctionIdentityTable by the caller; here we
+        // set a placeholder that will be enriched after identity table build.
+        let identity = IdentityReality {
+            kind: "Unknown".to_string(),
+            confidence: Confidence::ZERO,
+            claims: claims
+                .iter()
+                .filter(|c| {
+                    c.claim_type == ClaimType::FunctionIdentity
+                        || c.claim_type == ClaimType::ExternalIdentity
+                })
+                .cloned()
+                .collect(),
+        };
+
+        // --- Range: only when both Start and End have acceptable reality ---
+        // Freeze 5: NEVER fabricate range when End is Unknown.
+        let range = if start_status != RealityStatus::Rejected
+            && start_status != RealityStatus::Unknown
+            && end_status != RealityStatus::Rejected
+            && end_status != RealityStatus::Unknown
+        {
+            end_addr.map(|ea| FunctionRange {
+                start: addr,
+                end_exclusive: ea,
+            })
+        } else {
+            None
+        };
+
+        FunctionReality {
+            start,
+            body,
+            end,
+            identity,
+            range,
+        }
     }
 
     /// Seed functions from entry point and exports.
@@ -322,10 +481,11 @@ impl FunctionDiscovery {
             }
 
             if let Some(entry) = functions.get_mut(&rf.begin_va) {
-                // Already discovered 鈥?add pdata as corroborating evidence
+                // Already discovered — add pdata as corroborating evidence
                 entry.evidence.push(
                     Evidence::new(EvidenceKind::PdataEntry)
                         .with_address(rf.begin_va)
+                        .with_end_address(rf.end_va)
                         .with_detail(format!(".pdata: [0x{:X}, 0x{:X})", rf.begin_va, rf.end_va))
                         .with_weight(0.4),
                 );
@@ -343,6 +503,7 @@ impl FunctionDiscovery {
                     WithEvidence::new(func).with_evidence(
                         Evidence::new(EvidenceKind::PdataEntry)
                             .with_address(rf.begin_va)
+                            .with_end_address(rf.end_va)
                             .with_detail(format!(
                                 ".pdata: [0x{:X}, 0x{:X})",
                                 rf.begin_va, rf.end_va

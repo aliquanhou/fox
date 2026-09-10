@@ -14,5 +14,9 @@ pub mod result;
 pub use address::Address;
 pub use edge::{CallEdgeKind, CallGraphEdge, CfgEdge, EdgeKind, IndirectCallKind};
 pub use error::FoxError;
-pub use evidence::{Confidence, Evidence, EvidenceKind, EvidenceList, WithEvidence};
+pub use evidence::{
+    adjudicate_reality, BodyReality, BoundaryReality, ClaimContradiction, ClaimStrength,
+    ClaimSubject, ClaimType, Confidence, Evidence, EvidenceClaim, EvidenceKind, EvidenceList,
+    FunctionRange, FunctionReality, IdentityReality, RealityStatus, WithEvidence,
+};
 pub use result::FoxResult;

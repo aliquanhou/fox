@@ -48,7 +48,12 @@ enum Commands {
     /// Run full analysis pipeline
     Analyze { file: PathBuf },
     /// List discovered functions with evidence and confidence tiers
-    Functions { file: PathBuf },
+    Functions {
+        file: PathBuf,
+        /// Show multi-dimensional Function Reality (P0-5.6B)
+        #[arg(long)]
+        reality: bool,
+    },
     /// Disassemble (entry point or --address)
     Disasm {
         file: PathBuf,
@@ -137,7 +142,7 @@ fn main() {
     let result = match &cli.command {
         Commands::Info { file } => cmd_info(file, cli.json),
         Commands::Analyze { file } => cmd_analyze(file, cli.json),
-        Commands::Functions { file } => cmd_functions(file, cli.json),
+        Commands::Functions { file, reality } => cmd_functions(file, cli.json, *reality),
         Commands::Disasm {
             file,
             address,
@@ -316,13 +321,56 @@ fn cmd_analyze(file: &PathBuf, json: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn cmd_functions(file: &PathBuf, json: bool) -> Result<(), String> {
+fn cmd_functions(file: &PathBuf, json: bool, show_reality: bool) -> Result<(), String> {
     let binary = load_binary(file)?;
     let result = fox_analysis::analyze_binary(&binary).map_err(|e| e.to_string())?;
     let functions = &result.functions;
 
     if json {
         println!("{}", serde_json::to_string_pretty(functions).unwrap());
+    } else if show_reality {
+        println!("=== FOX Functions — Reality View ({}) ===", functions.len());
+        println!(
+            "{:<20} {:>12} {:>10} {:>10} {:>10} {:>10} {:>10}",
+            "Name", "Address", "Start", "Body", "End", "Identity", "Range"
+        );
+        println!("{}", "-".repeat(90));
+        for func in functions {
+            let reality = func.value.reality.as_ref();
+            let start = reality
+                .map(|r| format!("{}", r.start.status))
+                .unwrap_or_default();
+            let body = reality
+                .map(|r| format!("{}", r.body.status))
+                .unwrap_or_default();
+            let end = reality
+                .map(|r| format!("{}", r.end.status))
+                .unwrap_or_default();
+            let identity = reality.map(|r| r.identity.kind.clone()).unwrap_or_default();
+            let range = reality
+                .and_then(|r| r.range.map(|rg| format!("{}", rg)))
+                .unwrap_or_else(|| "-".to_string());
+            println!(
+                "{:<20} 0x{:>10X} {:>10} {:>10} {:>10} {:>10} {:>10}",
+                func.value.name, func.value.address.0, start, body, end, identity, range
+            );
+        }
+        // Reality distribution summary
+        let mut start_dist = std::collections::BTreeMap::new();
+        let mut body_dist = std::collections::BTreeMap::new();
+        let mut end_dist = std::collections::BTreeMap::new();
+        for func in functions {
+            if let Some(r) = &func.value.reality {
+                *start_dist.entry(format!("{}", r.start.status)).or_insert(0) += 1;
+                *body_dist.entry(format!("{}", r.body.status)).or_insert(0) += 1;
+                *end_dist.entry(format!("{}", r.end.status)).or_insert(0) += 1;
+            }
+        }
+        println!();
+        println!("--- Reality Distribution ---");
+        println!("Start: {:?}", start_dist);
+        println!("Body:  {:?}", body_dist);
+        println!("End:   {:?}", end_dist);
     } else {
         println!("=== FOX Functions ({}) ===", functions.len());
         println!(

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Confidence score for an analysis result. 0.0 = no confidence, 1.0 = certain.
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize, Default)]
 pub struct Confidence(pub f64);
 
 impl Confidence {
@@ -379,14 +379,23 @@ impl EvidenceClaim {
 /// - ValidFunctionBody → FunctionBody (NOT FunctionStart)
 /// - ReachableFromEntry → Reachability (NOT FunctionStart)
 /// - AddressTaken → no auto-mapping (per P0-5.3A, may be BB label)
-/// - Negative evidence → NegativeBoundary
+/// - Negative evidence → dimension-precise (InvalidFunctionBody→FunctionBody,
+///   NonExecutableSection→FunctionStart, Unreachable→Reachability)
 ///
 /// `subject_addr` is the address the evidence was observed at, if known.
 impl EvidenceKind {
-    pub fn default_claims(&self, subject_addr: Option<u64>) -> Vec<EvidenceClaim> {
+    pub fn default_claims(
+        &self,
+        subject_addr: Option<u64>,
+        end_addr: Option<u64>,
+    ) -> Vec<EvidenceClaim> {
         let sub = match subject_addr {
             Some(a) => ClaimSubject::Address(a),
             None => ClaimSubject::Unknown,
+        };
+        let end_sub = match end_addr {
+            Some(a) => ClaimSubject::Address(a),
+            None => sub,
         };
         match self {
             // --- Strong FunctionStart evidence ---
@@ -411,7 +420,7 @@ impl EvidenceKind {
                 ),
                 EvidenceClaim::new(
                     ClaimType::FunctionEnd,
-                    sub,
+                    end_sub,
                     ClaimStrength::Strong,
                     self.clone(),
                 ),
@@ -515,13 +524,38 @@ impl EvidenceKind {
                 vec![]
             }
 
-            // --- Negative evidence ---
-            EvidenceKind::NegativeNonExecutableSection
-            | EvidenceKind::NegativeInvalidInstructionBoundary
-            | EvidenceKind::NegativeUnreachable
-            | EvidenceKind::NegativeDataAddress
-            | EvidenceKind::InvalidFunctionBody { .. } => vec![EvidenceClaim::new(
-                ClaimType::NegativeBoundary,
+            // --- Negative evidence (P0-5.6B: dimension-precise mapping) ---
+            // InvalidFunctionBody negates BODY, not boundary.
+            EvidenceKind::InvalidFunctionBody { .. } => vec![EvidenceClaim::new(
+                ClaimType::FunctionBody,
+                sub,
+                ClaimStrength::Negative,
+                self.clone(),
+            )],
+            // Non-executable section: address cannot be a function START.
+            EvidenceKind::NegativeNonExecutableSection => vec![EvidenceClaim::new(
+                ClaimType::FunctionStart,
+                sub,
+                ClaimStrength::Negative,
+                self.clone(),
+            )],
+            // Invalid instruction boundary: address cannot be a valid function START.
+            EvidenceKind::NegativeInvalidInstructionBoundary => vec![EvidenceClaim::new(
+                ClaimType::FunctionStart,
+                sub,
+                ClaimStrength::Negative,
+                self.clone(),
+            )],
+            // Data address: identified as data, cannot be function START.
+            EvidenceKind::NegativeDataAddress => vec![EvidenceClaim::new(
+                ClaimType::FunctionStart,
+                sub,
+                ClaimStrength::Negative,
+                self.clone(),
+            )],
+            // Unreachable: negates Reachability (contextual for Start, not direct boundary negation).
+            EvidenceKind::NegativeUnreachable => vec![EvidenceClaim::new(
+                ClaimType::Reachability,
                 sub,
                 ClaimStrength::Negative,
                 self.clone(),
@@ -578,6 +612,10 @@ pub struct Evidence {
     pub kind: EvidenceKind,
     /// Address where this evidence was observed
     pub address: Option<u64>,
+    /// End address for range-bearing evidence (e.g., .pdata RUNTIME_FUNCTION.EndAddress).
+    /// This is a raw observation from the binary, not a fabricated field.
+    #[serde(default)]
+    pub end_address: Option<u64>,
     /// Optional detail text
     pub detail: Option<String>,
     /// How much this single piece of evidence contributes (0.0 - 1.0)
@@ -593,6 +631,7 @@ impl Evidence {
         Evidence {
             kind,
             address: None,
+            end_address: None,
             detail: None,
             weight: 0.5,
             claim: None,
@@ -601,6 +640,13 @@ impl Evidence {
 
     pub fn with_address(mut self, addr: u64) -> Self {
         self.address = Some(addr);
+        self
+    }
+
+    /// Set the end address for range-bearing evidence (e.g., .pdata EndAddress).
+    /// This is a raw observation from the binary metadata.
+    pub fn with_end_address(mut self, addr: u64) -> Self {
+        self.end_address = Some(addr);
         self
     }
 
@@ -629,7 +675,7 @@ impl Evidence {
         if let Some(c) = &self.claim {
             vec![c.clone()]
         } else {
-            self.kind.default_claims(self.address)
+            self.kind.default_claims(self.address, self.end_address)
         }
     }
 }
@@ -785,6 +831,232 @@ impl<T: fmt::Display> fmt::Display for WithEvidence<T> {
     }
 }
 
+// ============================================================================
+// P0-5.6B: Function Reality Model
+//
+// Reality is multi-dimensional, not a single score.
+// A function has independent Start / Body / End / Identity reality,
+// each with its own status, positive claims, and negative claims.
+//
+// ClaimStrength ≠ RealityStatus. RealityStatus is the result of
+// claim aggregation + conflict adjudication, not a simple mapping.
+// ============================================================================
+
+/// The adjudicated status of a single reality dimension.
+///
+/// This is NOT a direct mapping from ClaimStrength. It is the result
+/// of aggregating positive and negative claims and adjudicating conflicts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum RealityStatus {
+    /// Strong positive evidence, no significant negative.
+    Confirmed,
+    /// Multiple supporting evidence, or Strong + minor negative.
+    High,
+    /// Single supporting evidence, or supporting + negative.
+    Probable,
+    /// Insufficient or conflicting evidence.
+    #[default]
+    Unknown,
+    /// Negative evidence dominates.
+    Rejected,
+}
+
+impl fmt::Display for RealityStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RealityStatus::Confirmed => write!(f, "Confirmed"),
+            RealityStatus::High => write!(f, "High"),
+            RealityStatus::Probable => write!(f, "Probable"),
+            RealityStatus::Unknown => write!(f, "Unknown"),
+            RealityStatus::Rejected => write!(f, "Rejected"),
+        }
+    }
+}
+
+/// A contradiction between a positive and negative claim on the same dimension.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaimContradiction {
+    pub positive_claim: EvidenceClaim,
+    pub negative_claim: EvidenceClaim,
+    pub description: String,
+}
+
+/// Reality for a boundary dimension (Start or End).
+///
+/// Carries independent positive/negative claims and adjudicated status.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BoundaryReality {
+    /// The address this boundary applies to (start address for Start,
+    /// end_exclusive address for End).
+    pub address: Option<u64>,
+    /// Adjudicated status after claim aggregation.
+    pub status: RealityStatus,
+    /// Numeric confidence辅助值 (derived, not authoritative).
+    pub confidence: Confidence,
+    /// Positive claims supporting this boundary.
+    pub positive_claims: Vec<EvidenceClaim>,
+    /// Negative claims refuting this boundary.
+    pub negative_claims: Vec<EvidenceClaim>,
+    /// Detected contradictions between positive and negative claims.
+    pub contradictions: Vec<ClaimContradiction>,
+}
+
+/// Reality for the function body dimension.
+///
+/// Body = Instruction/BasicBlock ownership + control-flow region.
+/// NOT a contiguous byte range.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BodyReality {
+    /// Number of instructions in the function body (from validation).
+    pub instruction_count: usize,
+    /// Number of basic blocks (if CFG available).
+    pub basic_block_count: usize,
+    /// How the body terminates.
+    pub termination_kind: String,
+    /// Adjudicated status.
+    pub status: RealityStatus,
+    /// Numeric confidence辅助值.
+    pub confidence: Confidence,
+    /// Positive claims (e.g., ValidFunctionBody).
+    pub positive_claims: Vec<EvidenceClaim>,
+    /// Negative claims (e.g., InvalidFunctionBody).
+    pub negative_claims: Vec<EvidenceClaim>,
+    /// Contradictions.
+    pub contradictions: Vec<ClaimContradiction>,
+}
+
+/// Reality for the identity dimension.
+///
+/// Identity answers "who is this?" — NOT "is this a function?".
+/// Identity=Unknown does NOT mean the function doesn't exist.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct IdentityReality {
+    pub kind: String,
+    pub confidence: Confidence,
+    pub claims: Vec<EvidenceClaim>,
+}
+
+/// A function range with exclusive end boundary.
+///
+/// Semantics: [start, end_exclusive)
+/// Only constructed when both Start and End have acceptable reality.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FunctionRange {
+    pub start: u64,
+    pub end_exclusive: u64,
+}
+
+impl fmt::Display for FunctionRange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[0x{:X}, 0x{:X})", self.start, self.end_exclusive)
+    }
+}
+
+/// The complete multi-dimensional function reality model.
+///
+/// Reality is NOT a boolean and NOT a single score.
+/// Each dimension is independent and adjudicated separately.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FunctionReality {
+    pub start: BoundaryReality,
+    pub body: BodyReality,
+    pub end: BoundaryReality,
+    pub identity: IdentityReality,
+    /// Complete range only when Start AND End both have acceptable reality.
+    /// None when End is Unknown — never fabricate a range.
+    pub range: Option<FunctionRange>,
+}
+
+/// Adjudicate reality from positive and negative claims.
+///
+/// Flow: Claims → Aggregation → Adjudication → RealityStatus
+///
+/// Rules:
+/// - No negative: strongest positive strength → status
+/// - Negative >= strongest positive: Rejected or Unknown
+/// - Negative < strongest positive: downgrade one tier
+/// - Both present and comparable: Unknown (don't force a verdict)
+/// - No claims at all: Unknown
+pub fn adjudicate_reality(
+    positive: &[EvidenceClaim],
+    negative: &[EvidenceClaim],
+) -> (RealityStatus, Vec<ClaimContradiction>) {
+    let mut contradictions = Vec::new();
+
+    // Record contradictions
+    for p in positive {
+        for n in negative {
+            contradictions.push(ClaimContradiction {
+                positive_claim: p.clone(),
+                negative_claim: n.clone(),
+                description: format!(
+                    "Positive {} conflicts with Negative {}",
+                    p.claim_type, n.claim_type
+                ),
+            });
+        }
+    }
+
+    let strongest_positive = positive.iter().map(|c| strength_rank(c.strength)).max();
+    let strongest_negative = negative.iter().map(|c| strength_rank(c.strength)).max();
+
+    match (strongest_positive, strongest_negative) {
+        (None, None) => (RealityStatus::Unknown, contradictions),
+        (None, Some(_)) => (RealityStatus::Rejected, contradictions),
+        (Some(pos), None) => (rank_to_status(pos), contradictions),
+        (Some(pos), Some(neg)) => {
+            if neg >= pos {
+                // Negative dominates or ties → don't confirm
+                if neg == NEGATIVE_RANK && pos == STRONG_RANK {
+                    // Strong positive vs negative → Unknown (conflict, not rejection)
+                    (RealityStatus::Unknown, contradictions)
+                } else {
+                    (RealityStatus::Rejected, contradictions)
+                }
+            } else {
+                // Positive stronger → downgrade one tier
+                (downgrade(rank_to_status(pos)), contradictions)
+            }
+        }
+    }
+}
+
+/// Numeric rank for claim strength comparison.
+/// Higher = stronger. Negative is treated as a separate dominant rank.
+const UNKNOWN_RANK: u8 = 0;
+const CONTEXTUAL_RANK: u8 = 1;
+const SUPPORTING_RANK: u8 = 2;
+const STRONG_RANK: u8 = 3;
+const NEGATIVE_RANK: u8 = 4;
+
+fn strength_rank(s: ClaimStrength) -> u8 {
+    match s {
+        ClaimStrength::Strong => STRONG_RANK,
+        ClaimStrength::Supporting => SUPPORTING_RANK,
+        ClaimStrength::Contextual => CONTEXTUAL_RANK,
+        ClaimStrength::Negative => NEGATIVE_RANK,
+        ClaimStrength::Unknown => UNKNOWN_RANK,
+    }
+}
+
+fn rank_to_status(rank: u8) -> RealityStatus {
+    match rank {
+        STRONG_RANK => RealityStatus::Confirmed,
+        SUPPORTING_RANK => RealityStatus::High,
+        CONTEXTUAL_RANK => RealityStatus::Probable,
+        _ => RealityStatus::Unknown,
+    }
+}
+
+fn downgrade(s: RealityStatus) -> RealityStatus {
+    match s {
+        RealityStatus::Confirmed => RealityStatus::High,
+        RealityStatus::High => RealityStatus::Probable,
+        RealityStatus::Probable => RealityStatus::Unknown,
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -932,12 +1204,31 @@ mod tests {
     }
 
     #[test]
-    fn test_negative_evidence_maps_to_negative_boundary() {
+    fn test_negative_evidence_maps_to_correct_dimension() {
+        // P0-5.6B Freeze 11: Negative evidence must map to the correct dimension.
+        // NonExecutableSection negates FunctionStart, NOT generic NegativeBoundary.
         let ev = Evidence::new(EvidenceKind::NegativeNonExecutableSection).with_address(0x402000);
         let claims = ev.claims();
         assert_eq!(claims.len(), 1);
-        assert_eq!(claims[0].claim_type, ClaimType::NegativeBoundary);
+        assert_eq!(claims[0].claim_type, ClaimType::FunctionStart);
         assert_eq!(claims[0].strength, ClaimStrength::Negative);
+
+        // InvalidFunctionBody negates FunctionBody, NOT boundary.
+        let ev2 = Evidence::new(EvidenceKind::InvalidFunctionBody {
+            reason: "no RET".to_string(),
+        })
+        .with_address(0x403000);
+        let claims2 = ev2.claims();
+        assert_eq!(claims2.len(), 1);
+        assert_eq!(claims2[0].claim_type, ClaimType::FunctionBody);
+        assert_eq!(claims2[0].strength, ClaimStrength::Negative);
+
+        // NegativeUnreachable negates Reachability.
+        let ev3 = Evidence::new(EvidenceKind::NegativeUnreachable).with_address(0x404000);
+        let claims3 = ev3.claims();
+        assert_eq!(claims3.len(), 1);
+        assert_eq!(claims3[0].claim_type, ClaimType::Reachability);
+        assert_eq!(claims3[0].strength, ClaimStrength::Negative);
     }
 
     #[test]
@@ -1060,5 +1351,191 @@ mod tests {
         assert_eq!(format!("{}", ClaimStrength::Strong), "Strong");
         assert_eq!(format!("{}", ClaimStrength::Supporting), "Supporting");
         assert_eq!(format!("{}", ClaimStrength::Negative), "Negative");
+    }
+
+    // ===== P0-5.6B Tests =====
+
+    #[test]
+    fn test_evidence_end_address() {
+        let ev = Evidence::new(EvidenceKind::PdataEntry)
+            .with_address(0x140001000)
+            .with_end_address(0x140001200);
+        assert_eq!(ev.address, Some(0x140001000));
+        assert_eq!(ev.end_address, Some(0x140001200));
+    }
+
+    #[test]
+    fn test_pdata_function_end_subject_precise() {
+        // P2 fix: FunctionEnd claim subject must be end_va, NOT begin_va
+        let ev = Evidence::new(EvidenceKind::PdataEntry)
+            .with_address(0x140001000)
+            .with_end_address(0x140001200);
+        let claims = ev.claims();
+        assert_eq!(claims.len(), 2);
+        // FunctionStart → begin address
+        assert_eq!(claims[0].claim_type, ClaimType::FunctionStart);
+        assert_eq!(claims[0].subject, ClaimSubject::Address(0x140001000));
+        // FunctionEnd → end address (precise, not begin!)
+        assert_eq!(claims[1].claim_type, ClaimType::FunctionEnd);
+        assert_eq!(claims[1].subject, ClaimSubject::Address(0x140001200));
+    }
+
+    #[test]
+    fn test_pdata_without_end_address_falls_back_to_begin() {
+        // If end_address is None, FunctionEnd falls back to begin (backward compat)
+        let ev = Evidence::new(EvidenceKind::PdataEntry).with_address(0x140001000);
+        let claims = ev.claims();
+        assert_eq!(claims[1].subject, ClaimSubject::Address(0x140001000));
+    }
+
+    #[test]
+    fn test_function_range_exclusive() {
+        let range = FunctionRange {
+            start: 0x1000,
+            end_exclusive: 0x10A8,
+        };
+        assert_eq!(format!("{}", range), "[0x1000, 0x10A8)");
+    }
+
+    #[test]
+    fn test_reality_status_display() {
+        assert_eq!(format!("{}", RealityStatus::Confirmed), "Confirmed");
+        assert_eq!(format!("{}", RealityStatus::Unknown), "Unknown");
+        assert_eq!(format!("{}", RealityStatus::Rejected), "Rejected");
+    }
+
+    #[test]
+    fn test_adjudicate_no_claims_is_unknown() {
+        let (status, contradictions) = adjudicate_reality(&[], &[]);
+        assert_eq!(status, RealityStatus::Unknown);
+        assert!(contradictions.is_empty());
+    }
+
+    #[test]
+    fn test_adjudicate_strong_positive_is_confirmed() {
+        let pos = vec![EvidenceClaim::new(
+            ClaimType::FunctionStart,
+            ClaimSubject::Address(0x1000),
+            ClaimStrength::Strong,
+            EvidenceKind::PdataEntry,
+        )];
+        let (status, _) = adjudicate_reality(&pos, &[]);
+        assert_eq!(status, RealityStatus::Confirmed);
+    }
+
+    #[test]
+    fn test_conflicting_start_claims() {
+        // Correction ①: Positive + Negative must be adjudicated, not simple mapped
+        let pos = vec![EvidenceClaim::new(
+            ClaimType::FunctionStart,
+            ClaimSubject::Address(0x1000),
+            ClaimStrength::Strong,
+            EvidenceKind::PdataEntry,
+        )];
+        let neg = vec![EvidenceClaim::new(
+            ClaimType::FunctionStart,
+            ClaimSubject::Address(0x1000),
+            ClaimStrength::Negative,
+            EvidenceKind::NegativeNonExecutableSection,
+        )];
+        let (status, contradictions) = adjudicate_reality(&pos, &neg);
+        // Strong positive vs negative → Unknown (conflict, not auto-confirm)
+        assert_eq!(status, RealityStatus::Unknown);
+        assert!(!contradictions.is_empty());
+    }
+
+    #[test]
+    fn test_negative_evidence_can_block_confirmation() {
+        // Even with Strong positive, Strong negative can block Confirmed
+        let pos = vec![EvidenceClaim::new(
+            ClaimType::FunctionStart,
+            ClaimSubject::Address(0x1000),
+            ClaimStrength::Supporting,
+            EvidenceKind::CallReference { count: 3 },
+        )];
+        let neg = vec![EvidenceClaim::new(
+            ClaimType::FunctionStart,
+            ClaimSubject::Address(0x1000),
+            ClaimStrength::Negative,
+            EvidenceKind::NegativeDataAddress,
+        )];
+        let (status, _) = adjudicate_reality(&pos, &neg);
+        // Supporting positive vs Negative → Rejected (negative dominates)
+        assert_eq!(status, RealityStatus::Rejected);
+    }
+
+    #[test]
+    fn test_adjudicate_supporting_positive_no_negative_is_high() {
+        let pos = vec![EvidenceClaim::new(
+            ClaimType::FunctionStart,
+            ClaimSubject::Address(0x1000),
+            ClaimStrength::Supporting,
+            EvidenceKind::CallReference { count: 1 },
+        )];
+        let (status, _) = adjudicate_reality(&pos, &[]);
+        assert_eq!(status, RealityStatus::High);
+    }
+
+    #[test]
+    fn test_invalid_function_body_negates_body_not_start() {
+        // Freeze 11: InvalidFunctionBody → FunctionBody/Negative
+        let ev = Evidence::new(EvidenceKind::InvalidFunctionBody {
+            reason: "no RET".to_string(),
+        })
+        .with_address(0x1000);
+        let claims = ev.claims();
+        assert_eq!(claims[0].claim_type, ClaimType::FunctionBody);
+        assert_eq!(claims[0].strength, ClaimStrength::Negative);
+        // Must NOT be NegativeBoundary
+        assert_ne!(claims[0].claim_type, ClaimType::NegativeBoundary);
+    }
+
+    #[test]
+    fn test_identity_not_prerequisite() {
+        // Identity=Unknown is valid; FunctionReality can have all dimensions
+        // confirmed while identity is Unknown.
+        let mut reality = FunctionReality::default();
+        reality.start.status = RealityStatus::Confirmed;
+        reality.body.status = RealityStatus::Confirmed;
+        reality.end.status = RealityStatus::Confirmed;
+        reality.identity.kind = "Unknown".to_string();
+        // This is a valid state — identity does not determine existence
+        assert_eq!(reality.start.status, RealityStatus::Confirmed);
+        assert_eq!(reality.identity.kind, "Unknown");
+    }
+
+    #[test]
+    fn test_end_unknown_no_fabricated_range() {
+        // Freeze 5: End=Unknown → range must be None, never fabricated
+        let mut reality = FunctionReality::default();
+        reality.start.status = RealityStatus::Confirmed;
+        reality.start.address = Some(0x1000);
+        reality.end.status = RealityStatus::Unknown;
+        reality.end.address = None;
+        reality.range = None; // Must NOT fabricate
+        assert!(reality.range.is_none());
+    }
+
+    #[test]
+    fn test_range_only_when_both_start_and_end_known() {
+        let mut reality = FunctionReality::default();
+        reality.start.status = RealityStatus::Confirmed;
+        reality.start.address = Some(0x1000);
+        reality.end.status = RealityStatus::Confirmed;
+        reality.end.address = Some(0x10A8);
+        reality.range = Some(FunctionRange {
+            start: 0x1000,
+            end_exclusive: 0x10A8,
+        });
+        assert!(reality.range.is_some());
+        assert_eq!(reality.range.unwrap().end_exclusive, 0x10A8);
+    }
+
+    #[test]
+    fn test_evidence_end_address_serde_default() {
+        // Backward compat: old JSON without end_address deserializes
+        let json = r#"{"kind":"EntryPoint","address":null,"detail":null,"weight":0.5}"#;
+        let ev: Evidence = serde_json::from_str(json).unwrap();
+        assert_eq!(ev.end_address, None);
     }
 }

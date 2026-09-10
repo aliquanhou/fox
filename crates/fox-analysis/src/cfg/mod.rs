@@ -304,6 +304,7 @@ mod tests {
             called_by: vec![],
             confidence_tier: crate::FunctionConfidence::Unknown,
             validation: crate::FunctionValidation::default(),
+            reality: None,
         };
 
         // Build a minimal binary for testing
