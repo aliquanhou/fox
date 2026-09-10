@@ -3,10 +3,12 @@
 //! P0-6.1: Expression Recovery (SSA → Expression Tree).
 //! P0-6.3A: Condition Recovery (CMP/TEST + Jcc → structured condition).
 //! P0-6.4B: Control Structure Recovery (If/Else + Guard Clause / Early Return).
+//! P0-6.6A: Structured IR (aggregate analysis → DecompilerFunction → Statements).
 
 pub mod condition;
 pub mod control_structure;
 pub mod expression;
+pub mod structured_ir;
 
 pub use condition::{
     recover_all_conditions, recover_condition, Condition, ConditionOperand, ConditionRecovery,
@@ -16,6 +18,10 @@ pub use control_structure::{
     UnknownBranch,
 };
 pub use expression::{BinaryOp, CallTarget, Expression, ExpressionRecovery, PhiIncoming, UnaryOp};
+pub use structured_ir::{
+    AssignTarget, DecompilerFunction, FunctionEvidence, Statement, StatementEvidence,
+    StructuredIRBudget, StructuredIRBuilder, VariableOrigin,
+};
 
 pub struct Decompiler;
 
