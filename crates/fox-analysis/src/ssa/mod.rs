@@ -63,6 +63,12 @@ pub struct SSAInstruction {
     pub op: String,
     pub operands: Vec<SSAOperand>,
     pub original_mnemonic: String,
+    /// Index into `operands` of the first explicit register Write/ReadWrite.
+    /// None = no explicit register destination (e.g. mul/div with implicit
+    /// eax/edx writes, push with implicit esp, call with implicit return reg).
+    /// FLAGS writes are excluded from this index.
+    #[serde(default)]
+    pub destination_operand_idx: Option<usize>,
 }
 
 /// SSA operand (versioned variable or constant).
@@ -158,10 +164,14 @@ impl SSAConstructor {
             // Rename instructions
             for inst in &block.instructions {
                 let mut ssa_operands = Vec::new();
-                for op in &inst.operands {
+                let mut dest_idx: Option<usize> = None;
+                for (op_idx, op) in inst.operands.iter().enumerate() {
                     match op {
                         IROperand::Register { name, access, .. } => {
                             if matches!(access, OperandAccess::Write | OperandAccess::ReadWrite) {
+                                if dest_idx.is_none() {
+                                    dest_idx = Some(op_idx);
+                                }
                                 // New definition: increment version
                                 let version = variable_versions.entry(name.clone()).or_insert(0);
                                 *version += 1;
@@ -222,6 +232,7 @@ impl SSAConstructor {
                     op: format!("{:?}", inst.op),
                     operands: ssa_operands,
                     original_mnemonic: inst.original_mnemonic.clone().unwrap_or_default(),
+                    destination_operand_idx: dest_idx,
                 });
             }
 
@@ -460,11 +471,16 @@ impl SSAConstructor {
         // Process instructions
         for (inst_idx, inst) in block.instructions.iter().enumerate() {
             let mut ssa_operands = Vec::new();
+            let mut dest_idx: Option<usize> = None;
 
             for (op_idx, op) in inst.operands.iter().enumerate() {
                 match op {
                     IROperand::Register { name, access, .. } => {
                         if matches!(access, OperandAccess::Write | OperandAccess::ReadWrite) {
+                            // First explicit register Write/ReadWrite = destination
+                            if dest_idx.is_none() {
+                                dest_idx = Some(op_idx);
+                            }
                             // Definition: new version
                             let new_ver = Self::push_version(name, version_counter, version_stack);
                             pushed_versions.push(name.clone());
@@ -553,6 +569,7 @@ impl SSAConstructor {
                 op: format!("{:?}", inst.op),
                 operands: ssa_operands,
                 original_mnemonic: inst.original_mnemonic.clone().unwrap_or_default(),
+                destination_operand_idx: dest_idx,
             });
         }
 

@@ -107,10 +107,13 @@ pub struct ExpressionSource {
 
 /// Expression recovery configuration.
 pub struct ExpressionRecovery {
-    /// Maximum recursion depth.
+    /// Maximum recursion depth per expression.
     pub max_depth: usize,
-    /// Maximum total expression nodes.
+    /// Maximum nodes per single expression recovery.
     pub max_nodes: usize,
+    /// Maximum total nodes across all definitions in one function.
+    /// Prevents recover_all_definitions() from cumulative OOM on real binaries.
+    pub function_total_budget: usize,
 }
 
 impl Default for ExpressionRecovery {
@@ -118,6 +121,7 @@ impl Default for ExpressionRecovery {
         Self {
             max_depth: 64,
             max_nodes: 10_000,
+            function_total_budget: 100_000,
         }
     }
 }
@@ -173,16 +177,33 @@ impl ExpressionRecovery {
 
     /// Recover expressions for all definitions in the function.
     /// Returns Vec<(block_id, inst_idx, variable_name, version, expression)>.
+    ///
+    /// All definitions share a single function-level node budget
+    /// (function_total_budget) to prevent cumulative OOM on real binaries.
     pub fn recover_all_definitions(
         &self,
         ssa: &SSAFunction,
     ) -> Vec<(usize, usize, String, u32, Expression)> {
-        let ctx = RecoveryContext::new(ssa, self.max_depth, self.max_nodes);
+        let ctx = RecoveryContext::new(ssa, self.max_depth, self.function_total_budget);
+        // Shared node counter across ALL definitions in this function.
+        let mut total_nodes: usize = 0;
         let mut results = Vec::new();
         for block in &ssa.basic_blocks {
             // Phi nodes
             for phi in &block.phi_nodes {
-                let expr = ctx.recover_phi(phi);
+                if total_nodes >= self.function_total_budget {
+                    results.push((
+                        block.id,
+                        usize::MAX,
+                        phi.variable.clone(),
+                        phi.result_version,
+                        Expression::Unknown {
+                            reason: "function node budget exhausted".to_string(),
+                        },
+                    ));
+                    continue;
+                }
+                let expr = ctx.recover_phi_with_nodes(phi, &mut total_nodes);
                 results.push((
                     block.id,
                     usize::MAX,
@@ -191,14 +212,32 @@ impl ExpressionRecovery {
                     expr,
                 ));
             }
-            // Instructions
+            // Instructions — use SSA-provided destination_operand_idx, not heuristic
             for (inst_idx, inst) in block.instructions.iter().enumerate() {
-                if let Some(SSAOperand::Variable { name, version }) = inst.operands.first() {
-                    // Only recover if this operand is a definition (write)
-                    // We can't easily tell Write vs Read from SSA, but convention:
-                    // first operand of value-producing ops is the destination.
-                    if is_value_producing_op(&inst.op) {
-                        let expr = ctx.recover_definition(block.id, inst_idx);
+                if total_nodes >= self.function_total_budget {
+                    if let Some(dest_idx) = inst.destination_operand_idx {
+                        if let Some(SSAOperand::Variable { name, version }) =
+                            inst.operands.get(dest_idx)
+                        {
+                            results.push((
+                                block.id,
+                                inst_idx,
+                                name.clone(),
+                                *version,
+                                Expression::Unknown {
+                                    reason: "function node budget exhausted".to_string(),
+                                },
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                if let Some(dest_idx) = inst.destination_operand_idx {
+                    if let Some(SSAOperand::Variable { name, version }) =
+                        inst.operands.get(dest_idx)
+                    {
+                        let expr =
+                            ctx.recover_definition_with_nodes(block.id, inst_idx, &mut total_nodes);
                         results.push((block.id, inst_idx, name.clone(), *version, expr));
                     }
                 }
@@ -208,33 +247,6 @@ impl ExpressionRecovery {
     }
 }
 
-/// Whether an SSA op produces a value in its first operand.
-fn is_value_producing_op(op: &str) -> bool {
-    matches!(
-        op,
-        "Mov"
-            | "Load"
-            | "Add"
-            | "Sub"
-            | "Mul"
-            | "Div"
-            | "Mod"
-            | "And"
-            | "Or"
-            | "Xor"
-            | "Shl"
-            | "Shr"
-            | "Sar"
-            | "Neg"
-            | "Not"
-            | "Inc"
-            | "Dec"
-            | "Lea"
-            | "Pop"
-            | "Call"
-    )
-}
-
 // ---------------------------------------------------------------------------
 // Internal recovery context
 // ---------------------------------------------------------------------------
@@ -242,13 +254,15 @@ fn is_value_producing_op(op: &str) -> bool {
 struct RecoveryContext<'a> {
     ssa: &'a SSAFunction,
     max_depth: usize,
-    max_nodes: usize,
+    /// Node budget for this recovery session.
+    /// For single definition: max_nodes. For all_definitions: function_total_budget.
+    node_budget: usize,
     /// (name, version) -> (block_id, inst_idx)
     def_index: HashMap<(String, u32), (usize, usize)>,
 }
 
 impl<'a> RecoveryContext<'a> {
-    fn new(ssa: &'a SSAFunction, max_depth: usize, max_nodes: usize) -> Self {
+    fn new(ssa: &'a SSAFunction, max_depth: usize, node_budget: usize) -> Self {
         let mut def_index = HashMap::new();
 
         // Index phi definitions
@@ -261,11 +275,16 @@ impl<'a> RecoveryContext<'a> {
             }
         }
 
-        // Index instruction definitions (first operand = destination)
+        // Index instruction definitions using SSA-provided destination_operand_idx.
+        // This is NOT a heuristic: SSA construction records which explicit
+        // register operand is Write/ReadWrite. None = no explicit register dest
+        // (e.g. mul/div implicit eax/edx, push implicit esp, call implicit ret reg).
         for block in &ssa.basic_blocks {
             for (inst_idx, inst) in block.instructions.iter().enumerate() {
-                if let Some(SSAOperand::Variable { name, version }) = inst.operands.first() {
-                    if is_value_producing_op(&inst.op) {
+                if let Some(dest_idx) = inst.destination_operand_idx {
+                    if let Some(SSAOperand::Variable { name, version }) =
+                        inst.operands.get(dest_idx)
+                    {
                         def_index.insert((name.clone(), *version), (block.id, inst_idx));
                     }
                 }
@@ -275,15 +294,23 @@ impl<'a> RecoveryContext<'a> {
         Self {
             ssa,
             max_depth,
-            max_nodes,
+            node_budget,
             def_index,
         }
     }
 
     fn recover_definition(&self, block_id: usize, inst_idx: usize) -> Expression {
-        // We need &mut for node_count but the recursive API uses &self.
-        // Use interior mutability pattern via a separate mutable method.
         self.recover_definition_inner(block_id, inst_idx, 0, &mut Vec::new(), &mut 0)
+    }
+
+    /// Recover a definition using a shared node counter (for function-level budget).
+    fn recover_definition_with_nodes(
+        &self,
+        block_id: usize,
+        inst_idx: usize,
+        nodes: &mut usize,
+    ) -> Expression {
+        self.recover_definition_inner(block_id, inst_idx, 0, &mut Vec::new(), nodes)
     }
 
     fn recover_use(&self, block_id: usize, inst_idx: usize, op_idx: usize) -> Expression {
@@ -340,11 +367,12 @@ impl<'a> RecoveryContext<'a> {
         )
     }
 
-    fn recover_phi(&self, phi: &PhiNode) -> Expression {
+    /// Recover a phi using a shared node counter (for function-level budget).
+    fn recover_phi_with_nodes(&self, phi: &PhiNode, nodes: &mut usize) -> Expression {
         let mut incoming = Vec::new();
         for (pred_block, version) in &phi.incoming {
             let val =
-                self.recover_variable_inner(&phi.variable, *version, 0, &mut Vec::new(), &mut 0);
+                self.recover_variable_inner(&phi.variable, *version, 0, &mut Vec::new(), nodes);
             incoming.push(PhiIncoming {
                 block_id: *pred_block,
                 value: Box::new(val),
@@ -368,7 +396,7 @@ impl<'a> RecoveryContext<'a> {
                 reason: format!("max depth {} exceeded", self.max_depth),
             };
         }
-        if *nodes >= self.max_nodes {
+        if *nodes >= self.node_budget {
             return Expression::Unknown {
                 reason: "max nodes exceeded".to_string(),
             };
@@ -416,7 +444,7 @@ impl<'a> RecoveryContext<'a> {
         nodes: &mut usize,
     ) -> Expression {
         *nodes += 1;
-        if *nodes > self.max_nodes {
+        if *nodes > self.node_budget {
             return Expression::Unknown {
                 reason: "max nodes exceeded".to_string(),
             };
@@ -1192,6 +1220,7 @@ mod tests {
                             SSAOperand::Constant(10),
                         ],
                         original_mnemonic: "mov".to_string(),
+                        destination_operand_idx: Some(0),
                     }],
                     phi_nodes: vec![],
                     successors: vec![2],
@@ -1212,6 +1241,7 @@ mod tests {
                             SSAOperand::Constant(20),
                         ],
                         original_mnemonic: "mov".to_string(),
+                        destination_operand_idx: Some(0),
                     }],
                     phi_nodes: vec![],
                     successors: vec![2],
@@ -1280,6 +1310,7 @@ mod tests {
                         },
                     ],
                     original_mnemonic: "add".to_string(),
+                    destination_operand_idx: Some(0),
                 }],
                 phi_nodes: vec![],
                 successors: vec![],
@@ -1313,6 +1344,7 @@ mod tests {
         let recovery = ExpressionRecovery {
             max_depth: 3,
             max_nodes: 1000,
+            function_total_budget: 10000,
         };
 
         let mut insts = Vec::new();
@@ -1426,5 +1458,138 @@ mod tests {
         let defs = recovery.recover_all_definitions(&ssa);
         // Should find eax.1 (Mov) and eax.2 (Add)
         assert!(defs.len() >= 2);
+    }
+
+    // --- P1-1: destination_operand_idx tests ---
+
+    #[test]
+    fn test_mul_source_not_indexed_as_definition() {
+        // mul ebx: explicit operand ebx is Read, eax/edx are implicit writes.
+        // destination_operand_idx must be None → ebx must NOT be indexed as def.
+        let ssa = make_ssa(vec![
+            ir_inst(IROp::Mov, vec![reg_write("ebx", 32), imm(5, 32)]),
+            ir_inst(IROp::Mul, vec![reg_read("ebx", 32)]),
+        ]);
+        // Verify SSA recorded destination_operand_idx correctly
+        let mul_inst = &ssa.basic_blocks[0].instructions[1];
+        assert_eq!(
+            mul_inst.destination_operand_idx, None,
+            "mul must have no explicit register destination"
+        );
+        // recover_all_definitions should only find ebx.1 (from Mov), not ebx from Mul
+        let recovery = ExpressionRecovery::new();
+        let defs = recovery.recover_all_definitions(&ssa);
+        let ebx_defs: Vec<_> = defs
+            .iter()
+            .filter(|(_, _, name, _, _)| name == "ebx")
+            .collect();
+        assert_eq!(
+            ebx_defs.len(),
+            1,
+            "ebx should only have one definition (from Mov)"
+        );
+        assert_eq!(
+            ebx_defs[0].1, 0,
+            "ebx definition should be at instruction 0 (Mov)"
+        );
+    }
+
+    #[test]
+    fn test_destination_idx_readwrite_identified() {
+        // add eax, ebx: eax is ReadWrite → destination_operand_idx = Some(0)
+        let ssa = make_ssa(vec![ir_inst(
+            IROp::Add,
+            vec![reg_rw("eax", 32), reg_read("ebx", 32)],
+        )]);
+        let add_inst = &ssa.basic_blocks[0].instructions[0];
+        assert_eq!(
+            add_inst.destination_operand_idx,
+            Some(0),
+            "add eax,ebx destination should be operand 0"
+        );
+    }
+
+    #[test]
+    fn test_cmp_has_no_destination() {
+        // cmp eax, ebx: both Read, only FLAGS write → destination_operand_idx = None
+        let ssa = make_ssa(vec![ir_inst(
+            IROp::Cmp,
+            vec![reg_read("eax", 32), reg_read("ebx", 32)],
+        )]);
+        let cmp_inst = &ssa.basic_blocks[0].instructions[0];
+        assert_eq!(
+            cmp_inst.destination_operand_idx, None,
+            "cmp must have no register destination (only FLAGS)"
+        );
+        let recovery = ExpressionRecovery::new();
+        let defs = recovery.recover_all_definitions(&ssa);
+        assert!(
+            defs.is_empty(),
+            "cmp should produce no register definitions"
+        );
+    }
+
+    // --- P1-2: function-level resource budget tests ---
+
+    #[test]
+    fn test_function_budget_shared_across_definitions() {
+        // 5 simple Mov definitions, each costs ~1 node.
+        // function_total_budget=3 → only first 3 recover, rest fail-closed.
+        let mut insts = Vec::new();
+        for i in 0..5u64 {
+            insts.push(ir_inst(
+                IROp::Mov,
+                vec![reg_write(&format!("r{}", i), 64), imm(i, 64)],
+            ));
+        }
+        let ssa = make_ssa(insts);
+        let recovery = ExpressionRecovery {
+            max_depth: 64,
+            max_nodes: 10000,
+            function_total_budget: 3,
+        };
+        let defs = recovery.recover_all_definitions(&ssa);
+        assert_eq!(defs.len(), 5, "all 5 definitions should be enumerated");
+
+        let recovered: Vec<_> = defs
+            .iter()
+            .filter(|(_, _, _, _, e)| !matches!(e, Expression::Unknown { .. }))
+            .collect();
+        let unknowns: Vec<_> = defs
+            .iter()
+            .filter(|(_, _, _, _, e)| matches!(e, Expression::Unknown { .. }))
+            .collect();
+        assert!(recovered.len() <= 3, "at most 3 definitions within budget");
+        assert!(
+            unknowns.len() >= 2,
+            "at least 2 definitions should hit budget limit"
+        );
+        // Verify the Unknown reason mentions budget
+        for (_, _, _, _, e) in &unknowns {
+            if let Expression::Unknown { reason } = e {
+                assert!(
+                    reason.contains("budget") || reason.contains("nodes"),
+                    "unknown reason should mention budget/nodes, got: {}",
+                    reason
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_single_expression_budget_independent() {
+        // Single definition recovery uses max_nodes (per-expression), not function budget.
+        let ssa = make_ssa(vec![ir_inst(
+            IROp::Mov,
+            vec![reg_write("eax", 32), imm(42, 32)],
+        )]);
+        let recovery = ExpressionRecovery {
+            max_depth: 64,
+            max_nodes: 1, // tiny per-expression budget
+            function_total_budget: 100000,
+        };
+        // Single recovery: 1 node is within budget of 1 (check is > budget)
+        let expr = recovery.recover_definition(&ssa, 0, 0);
+        assert!(matches!(expr, Expression::Constant(42)));
     }
 }

@@ -34,6 +34,7 @@ fn ntcmach_expression_recovery_dogfood() {
     let recovery = ExpressionRecovery {
         max_depth: 32,
         max_nodes: 500,
+        function_total_budget: 5000,
     };
 
     let mut sampled = 0;
