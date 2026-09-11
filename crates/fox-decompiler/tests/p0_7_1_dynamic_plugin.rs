@@ -100,10 +100,11 @@ fn p0_7_1_dynamic_plugin_resolution() {
     // P0-7.1B: Two-pass approach
     // Pass 1: collect global function pointer slots (Store from GetProcAddress)
     let empty_slots: HashMap<u64, fox_decompiler::dynamic_plugin::TrackedValue> = HashMap::new();
-    let empty_heap: HashMap<i64, fox_decompiler::dynamic_plugin::TrackedValue> = HashMap::new();
+    let empty_heap: HashMap<(u64, i64), fox_decompiler::dynamic_plugin::TrackedValue> =
+        HashMap::new();
     let mut global_fp_slots: HashMap<u64, fox_decompiler::dynamic_plugin::TrackedValue> =
         HashMap::new();
-    let mut global_heap_slots: HashMap<i64, fox_decompiler::dynamic_plugin::TrackedValue> =
+    let mut global_heap_slots: HashMap<(u64, i64), fox_decompiler::dynamic_plugin::TrackedValue> =
         HashMap::new();
 
     for func_cfg in &result.cfg.function_cfgs {
@@ -139,8 +140,11 @@ fn p0_7_1_dynamic_plugin_resolution() {
         global_fp_slots.len(),
         global_heap_slots.len()
     );
-    for (offset, val) in &global_heap_slots {
-        println!("  heap[+0x{:x}] → {:?}", offset, val);
+    for ((global_addr, offset), val) in &global_heap_slots {
+        println!(
+            "  heap[base=0x{:x}+0x{:x}] → {:?}",
+            global_addr, offset, val
+        );
     }
 
     // Pass 2: resolve indirect calls using global slots
@@ -208,6 +212,80 @@ fn p0_7_1_dynamic_plugin_resolution() {
     for r in all_resolutions.iter().take(10) {
         println!("  @{:#010X} -> {}!{}", r.call_address, r.module, r.symbol);
     }
+
+    // P0-7.1B-R1: Print full Evidence chain for every resolved call
+    println!("\n=== Full Evidence Chain (P0-7.1B-R1) ===");
+    for r in &all_resolutions {
+        println!("  @{:#010X} -> {}!{}", r.call_address, r.module, r.symbol);
+        println!(
+            "    LoadLibraryA  @ {:#010X}  (module string @ {:#010X})",
+            r.evidence.load_library_address, r.evidence.module_name_address
+        );
+        println!(
+            "    GetProcAddress @ {:#010X}  (symbol string @ {:#010X})",
+            r.evidence.get_proc_address_address, r.evidence.symbol_name_address
+        );
+        // Evidence must not be zero
+        assert!(
+            r.evidence.load_library_address != 0,
+            "load_library_address must not be 0 for {}!{}",
+            r.module,
+            r.symbol
+        );
+        assert!(
+            r.evidence.get_proc_address_address != 0,
+            "get_proc_address_address must not be 0 for {}!{}",
+            r.module,
+            r.symbol
+        );
+        assert!(
+            r.evidence.module_name_address != 0,
+            "module_name_address must not be 0 for {}!{}",
+            r.module,
+            r.symbol
+        );
+        assert!(
+            r.evidence.symbol_name_address != 0,
+            "symbol_name_address must not be 0 for {}!{}",
+            r.module,
+            r.symbol
+        );
+    }
+
+    // P0-7.1B-R1: Regression Gate — exactly these 7 real dynamic calls
+    let expected: Vec<(u64, &str, &str)> = vec![
+        (0x00421BD0, "NTCDLLC", "DCompiler_f19"),
+        (0x0042F5C0, "NTCDLLG", "Dgraph_f00"),
+        (0x0042F7E0, "NTCDLLM", "DMachine_f00"),
+        (0x0042FE60, "NTCDLLC", "DCompiler_f00"),
+        (0x004301C0, "NTCDLLV", "DAutoTape_f00"),
+        (0x004303F0, "NTCDLLV", "DVtest_f00"),
+        (0x0043065A, "NTCDLLV", "DFeed0_f00"),
+    ];
+    println!("\n=== P0-7.1B-R1 Regression Gate: 7 required results ===");
+    for (call_addr, exp_module, exp_symbol) in &expected {
+        let found = all_resolutions.iter().any(|r| {
+            r.call_address == *call_addr && r.module == *exp_module && r.symbol == *exp_symbol
+        });
+        println!(
+            "  @{:#010X} -> {}!{} : {}",
+            call_addr,
+            exp_module,
+            exp_symbol,
+            if found { "PASS" } else { "FAIL" }
+        );
+        assert!(
+            found,
+            "Regression Gate: expected @{:#010X} -> {}!{} but not found",
+            call_addr, exp_module, exp_symbol
+        );
+    }
+    assert_eq!(
+        all_resolutions.len(),
+        7,
+        "Expected exactly 7 resolved indirect calls, got {}",
+        all_resolutions.len()
+    );
 
     // Gate 6: Merge resolutions into call_targets and re-decompile
     let dynamic_targets = resolutions_to_call_targets(&all_resolutions);
@@ -306,15 +384,14 @@ fn p0_7_1_dynamic_plugin_resolution() {
         total_stats.get_proc_address_calls > 0,
         "Should find GetProcAddress calls"
     );
-    // Phase 1: evidence chain established (LoadLibrary module names + GetProcAddress symbols recovered).
-    // Indirect call resolution requires memory tracking (function pointers stored in global structs),
-    // which is registered as GAP-P0-7.1-MEMORY-FUNCTION-POINTER for next phase.
+    // P0-7.1B: Memory function pointer recovery established.
+    // 7 real indirect dynamic calls resolved via Register→Store→Memory→Load→Register.
     assert!(
-        total_stats.load_library_resolved > 0 || total_stats.get_proc_address_resolved > 0,
-        "Should resolve at least some LoadLibraryA module names or GetProcAddress symbols"
+        total_stats.indirect_calls_resolved >= 7,
+        "Should resolve at least 7 indirect dynamic calls (P0-7.1B)"
     );
     println!(
-        "\n=== P0-7.1 Phase 1 Results ===\nLoadLibraryA: {}/{} resolved\nGetProcAddress: {}/{} resolved\nIndirect calls resolved: {}\n(Indirect call resolution requires memory tracking — registered as GAP)",
+        "\n=== P0-7.1B Results ===\nLoadLibraryA: {}/{} resolved\nGetProcAddress: {}/{} resolved\nIndirect calls resolved: {}\nEvidence: all 4 addresses non-zero for every resolution\nHeap identity: GlobalBasePointer proven, fail-closed otherwise",
         total_stats.load_library_resolved, total_stats.load_library_calls,
         total_stats.get_proc_address_resolved, total_stats.get_proc_address_calls,
         total_stats.indirect_calls_resolved

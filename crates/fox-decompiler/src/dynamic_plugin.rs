@@ -45,19 +45,51 @@ pub struct DynamicCallEvidence {
 }
 
 /// Internal tracked value during SSA scan.
+/// All semantic values carry their full evidence chain (P0-7.1B-R1).
 #[derive(Debug, Clone)]
 pub enum TrackedValue {
-    /// HMODULE from LoadLibraryA.
-    ModuleHandle(String),
-    /// Function pointer from GetProcAddress.
-    FunctionPointer { module: String, symbol: String },
+    /// HMODULE from LoadLibraryA, with evidence.
+    ModuleHandle {
+        module: String,
+        load_library_address: u64,
+        module_name_address: u64,
+    },
+    /// Function pointer from GetProcAddress, with full evidence chain.
+    FunctionPointer {
+        module: String,
+        symbol: String,
+        load_library_address: u64,
+        module_name_address: u64,
+        get_proc_address_address: u64,
+        symbol_name_address: u64,
+    },
     /// Constant address (e.g. from `mov reg, offset string`).
     ConstantAddress(u64),
     /// External function loaded from IAT (e.g. GetProcAddress via `mov reg, [IAT]`).
     ExternalFunction(String),
+    /// Global base pointer: register loaded from [global_addr].
+    /// Used to prove heap Store/Load refer to the same structural object.
+    GlobalBasePointer(u64),
     /// Not tracked.
     #[allow(dead_code)]
     Unknown,
+}
+
+/// Heap slot identity: must prove same base object, not just same offset.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum HeapBaseIdentity {
+    /// Base register loaded from a specific global address (e.g. mov ecx, [0x46E920]).
+    /// Store and Load with same (global_addr, offset) refer to same object slot.
+    Global(u64),
+    /// Base cannot be proven — fail-closed, do not resolve.
+    Unknown,
+}
+
+/// Module handle info with full evidence chain (P0-7.1B-R1).
+struct ModuleHandleInfo {
+    module: String,
+    load_library_address: u64,
+    module_name_address: u64,
 }
 
 /// Resolves dynamic plugin calls via LoadLibraryA + GetProcAddress pattern.
@@ -78,14 +110,15 @@ pub struct DynamicPluginResolver<'a> {
     memory_ssa: Option<&'a MemorySSAFunction>,
     /// MemoryVariable → tracked value (only Global addresses, exact identity).
     memory_values: HashMap<MemoryVariable, TrackedValue>,
-    /// Heap offset → tracked value (for [reg+offset] function pointer slots).
-    /// Key is the numeric displacement from the Memory description.
-    heap_offset_values: HashMap<i64, TrackedValue>,
+    /// Heap slot → tracked value. Key is (base_identity, offset) — must prove
+    /// same structural object, not just same offset (P0-7.1B-R1 heap alias hardening).
+    heap_offset_values: HashMap<(HeapBaseIdentity, i64), TrackedValue>,
     /// External global function pointer slots (cross-function, from first pass).
     /// Map: global address → tracked value (FunctionPointer/ModuleHandle).
     global_fp_slots: &'a HashMap<u64, TrackedValue>,
     /// External heap-offset function pointer slots (cross-function, from first pass).
-    global_heap_slots: &'a HashMap<i64, TrackedValue>,
+    /// Key: (global_base_addr, offset) — only Global base identity is cross-function safe.
+    global_heap_slots: &'a HashMap<(u64, i64), TrackedValue>,
     /// Statistics.
     pub stats: ResolverStats,
 }
@@ -111,7 +144,7 @@ impl<'a> DynamicPluginResolver<'a> {
         expr_engine: &'a ExpressionRecovery,
         memory_ssa: Option<&'a MemorySSAFunction>,
         global_fp_slots: &'a HashMap<u64, TrackedValue>,
-        global_heap_slots: &'a HashMap<i64, TrackedValue>,
+        global_heap_slots: &'a HashMap<(u64, i64), TrackedValue>,
     ) -> Self {
         Self {
             external_call_names,
@@ -143,8 +176,58 @@ impl<'a> DynamicPluginResolver<'a> {
     }
 
     /// Collect heap-offset function pointer slots (cross-function).
-    pub fn collected_heap_slots(&self) -> HashMap<i64, TrackedValue> {
-        self.heap_offset_values.clone()
+    /// Only returns slots with Global base identity (proven same object).
+    pub fn collected_heap_slots(&self) -> HashMap<(u64, i64), TrackedValue> {
+        let mut out = HashMap::new();
+        for ((base, offset), val) in &self.heap_offset_values {
+            if let HeapBaseIdentity::Global(global_addr) = base {
+                out.insert((*global_addr, *offset), val.clone());
+            }
+        }
+        out
+    }
+
+    /// Resolve heap base identity from a Memory description like "[ecx+0xdbcb04]".
+    /// Returns (base_identity, offset). If base register is a GlobalBasePointer,
+    /// we can prove same-object identity; otherwise Unknown (fail-closed).
+    fn resolve_heap_base(&self, description: &str) -> (HeapBaseIdentity, Option<i64>) {
+        let offset = Self::extract_heap_offset(description);
+        // Extract base register name from "[ecx+0x...]" or "[eax]"
+        let base_name: Option<String> = if description.starts_with('[') {
+            let inner = description.strip_prefix('[').unwrap_or(description);
+            let reg_end = inner
+                .find(|c: char| ['+', '-', ']'].contains(&c))
+                .unwrap_or(inner.len());
+            let reg = inner[..reg_end].trim().to_string();
+            if reg.is_empty() {
+                None
+            } else {
+                Some(reg)
+            }
+        } else {
+            None
+        };
+        let base_identity = match base_name {
+            Some(reg) => {
+                // Find latest version of this register holding a GlobalBasePointer
+                // We search reg_values for any version of this register that is GlobalBasePointer
+                let mut found: Option<u64> = None;
+                for ((name, _ver), val) in &self.reg_values {
+                    if name == &reg {
+                        if let TrackedValue::GlobalBasePointer(addr) = val {
+                            found = Some(*addr);
+                            break;
+                        }
+                    }
+                }
+                match found {
+                    Some(addr) => HeapBaseIdentity::Global(addr),
+                    None => HeapBaseIdentity::Unknown,
+                }
+            }
+            None => HeapBaseIdentity::Unknown,
+        };
+        (base_identity, offset)
     }
 
     /// Extract numeric displacement from a Memory description like "[ecx+0xdbcb04]".
@@ -183,9 +266,10 @@ impl<'a> DynamicPluginResolver<'a> {
             self.reg_values.retain(|_, v| {
                 matches!(
                     v,
-                    TrackedValue::ModuleHandle(_)
+                    TrackedValue::ModuleHandle { .. }
                         | TrackedValue::FunctionPointer { .. }
                         | TrackedValue::ExternalFunction(_)
+                        | TrackedValue::GlobalBasePointer(_)
                 )
             });
             // Preserve memory_values across blocks (Global function pointer slots).
@@ -276,17 +360,24 @@ impl<'a> DynamicPluginResolver<'a> {
         if let SSAOperand::Variable { name, version } = &inst.operands[0] {
             let tracked = self.reg_values.get(&(name.clone(), *version)).cloned();
             match tracked {
-                Some(TrackedValue::FunctionPointer { module, symbol }) => {
+                Some(TrackedValue::FunctionPointer {
+                    module,
+                    symbol,
+                    load_library_address,
+                    module_name_address,
+                    get_proc_address_address,
+                    symbol_name_address,
+                }) => {
                     self.stats.indirect_calls_resolved += 1;
                     self.resolutions.push(ResolvedDynamicCall {
                         call_address: inst.address,
                         module: module.clone(),
                         symbol: symbol.clone(),
                         evidence: DynamicCallEvidence {
-                            load_library_address: 0,
-                            get_proc_address_address: 0,
-                            module_name_address: 0,
-                            symbol_name_address: 0,
+                            load_library_address,
+                            get_proc_address_address,
+                            module_name_address,
+                            symbol_name_address,
                         },
                     });
                     self.clear_return_register();
@@ -318,21 +409,23 @@ impl<'a> DynamicPluginResolver<'a> {
         ssa: &SSAFunction,
         block_id: usize,
         inst_idx: usize,
-        _inst: &SSAInstruction,
+        inst: &SSAInstruction,
     ) {
         // Find the PUSH before this call that contains the module name string
         let module_name = self.recover_push_string_arg(ssa, block_id, inst_idx, 0);
         if let Some((name, str_addr)) = module_name {
             self.stats.load_library_resolved += 1;
             // LoadLibraryA returns HMODULE in eax
-            // Find the destination version of eax after this call
             if let Some(eax_ver) = self.find_next_register_version(ssa, block_id, inst_idx, "eax") {
                 self.reg_values.insert(
                     ("eax".to_string(), eax_ver),
-                    TrackedValue::ModuleHandle(name),
+                    TrackedValue::ModuleHandle {
+                        module: name,
+                        load_library_address: inst.address,
+                        module_name_address: str_addr,
+                    },
                 );
             }
-            let _ = str_addr; // Evidence tracking (simplified in first phase)
         } else {
             self.stats.broken_chains += 1;
             self.clear_return_register();
@@ -344,7 +437,7 @@ impl<'a> DynamicPluginResolver<'a> {
         ssa: &SSAFunction,
         block_id: usize,
         inst_idx: usize,
-        _inst: &SSAInstruction,
+        inst: &SSAInstruction,
     ) {
         // GetProcAddress(hModule, lpProcName)
         // x86 stdcall: args pushed right-to-left
@@ -364,14 +457,18 @@ impl<'a> DynamicPluginResolver<'a> {
         let module_handle = self.recover_push_as_module_handle(ssa, block_id, pushes[0]);
         let symbol_name = self.recover_push_string_arg_at(ssa, block_id, pushes[1]);
 
-        if let (Some(module), Some((symbol, _sym_addr))) = (module_handle, symbol_name) {
+        if let (Some(module_info), Some((symbol, sym_addr))) = (module_handle, symbol_name) {
             self.stats.get_proc_address_resolved += 1;
             if let Some(eax_ver) = self.find_next_register_version(ssa, block_id, inst_idx, "eax") {
                 self.reg_values.insert(
                     ("eax".to_string(), eax_ver),
                     TrackedValue::FunctionPointer {
-                        module: module.clone(),
-                        symbol: symbol.clone(),
+                        module: module_info.module,
+                        symbol,
+                        load_library_address: module_info.load_library_address,
+                        module_name_address: module_info.module_name_address,
+                        get_proc_address_address: inst.address,
+                        symbol_name_address: sym_addr,
                     },
                 );
             }
@@ -460,25 +557,47 @@ impl<'a> DynamicPluginResolver<'a> {
                         self.reg_values.insert((dst_name.clone(), *dst_ver), val);
                         return;
                     }
+                    // P0-7.1B-R1: Track global base pointer for heap identity proof.
+                    // mov ecx, [0x46E920] → GlobalBasePointer(0x46E920)
+                    // This lets us prove later heap Store/Load refer to same object.
+                    if let Some(hex_start) = description.find("0x") {
+                        let addr_str: String = description[hex_start + 2..]
+                            .chars()
+                            .take_while(|c| c.is_ascii_hexdigit())
+                            .collect();
+                        if let Ok(global_addr) = u64::from_str_radix(&addr_str, 16) {
+                            self.reg_values.insert(
+                                (dst_name.clone(), *dst_ver),
+                                TrackedValue::GlobalBasePointer(global_addr),
+                            );
+                            return;
+                        }
+                    }
                 }
-                // P0-7.1B: Load from heap slot that holds a function pointer
-                // mov reg, [ecx+offset] where offset was previously stored
-                // with a FunctionPointer from GetProcAddress.
+                // P0-7.1B-R1: Load from heap slot — must prove same base object.
+                // mov reg, [ecx+offset] where (base_identity, offset) was previously
+                // stored with a FunctionPointer. Fail-closed if base unknown.
                 if let MemoryVariable::Heap = &mem_var {
-                    if let Some(offset) = Self::extract_heap_offset(description) {
+                    let (base_identity, offset_opt) = self.resolve_heap_base(description);
+                    if let (HeapBaseIdentity::Global(global_addr), Some(offset)) =
+                        (&base_identity, offset_opt)
+                    {
+                        let key = (base_identity.clone(), offset);
                         // First check function-local
-                        if let Some(val) = self.heap_offset_values.get(&offset).cloned() {
+                        if let Some(val) = self.heap_offset_values.get(&key).cloned() {
                             self.stats.propagation_mov += 1;
                             self.reg_values.insert((dst_name.clone(), *dst_ver), val);
                             return;
                         }
-                        // Then check cross-function heap slots
-                        if let Some(val) = self.global_heap_slots.get(&offset).cloned() {
+                        // Then check cross-function heap slots (keyed by global_addr, offset)
+                        let cross_key = (*global_addr, offset);
+                        if let Some(val) = self.global_heap_slots.get(&cross_key).cloned() {
                             self.stats.propagation_mov += 1;
                             self.reg_values.insert((dst_name.clone(), *dst_ver), val);
                             return;
                         }
                     }
+                    // base_identity == Unknown → fail-closed, do not resolve
                 }
             }
         }
@@ -560,10 +679,13 @@ impl<'a> DynamicPluginResolver<'a> {
                             self.memory_values.insert(mem_var, val);
                         }
                         MemoryVariable::Heap => {
-                            // Track heap slots by displacement (e.g. [ecx+0xDBCB04]).
+                            // P0-7.1B-R1: Track heap slots by (base_identity, offset).
+                            // Must prove same structural object, not just same offset.
                             if let SSAOperand::Memory { description } = dst {
-                                if let Some(offset) = Self::extract_heap_offset(description) {
-                                    self.heap_offset_values.insert(offset, val);
+                                let (base_identity, offset_opt) =
+                                    self.resolve_heap_base(description);
+                                if let Some(offset) = offset_opt {
+                                    self.heap_offset_values.insert((base_identity, offset), val);
                                 }
                             }
                         }
@@ -691,24 +813,40 @@ impl<'a> DynamicPluginResolver<'a> {
         ssa: &SSAFunction,
         block_id: usize,
         push_idx: usize,
-    ) -> Option<String> {
+    ) -> Option<ModuleHandleInfo> {
         let block = &ssa.basic_blocks[block_id];
         let push_inst = &block.instructions[push_idx];
         // Check: PUSH source is a register holding a tracked ModuleHandle
         if !push_inst.operands.is_empty() {
             if let SSAOperand::Variable { name, version } = &push_inst.operands[0] {
-                if let Some(TrackedValue::ModuleHandle(name)) =
-                    self.reg_values.get(&(name.clone(), *version))
+                if let Some(TrackedValue::ModuleHandle {
+                    module,
+                    load_library_address,
+                    module_name_address,
+                }) = self.reg_values.get(&(name.clone(), *version))
                 {
-                    return Some(name.clone());
+                    return Some(ModuleHandleInfo {
+                        module: module.clone(),
+                        load_library_address: *load_library_address,
+                        module_name_address: *module_name_address,
+                    });
                 }
             }
         }
         // Fallback: recover_use
         let expr = self.expr_engine.recover_use(ssa, block_id, push_idx, 0);
         if let Expression::Variable { name, version } = expr {
-            if let Some(TrackedValue::ModuleHandle(name)) = self.reg_values.get(&(name, version)) {
-                return Some(name.clone());
+            if let Some(TrackedValue::ModuleHandle {
+                module,
+                load_library_address,
+                module_name_address,
+            }) = self.reg_values.get(&(name, version))
+            {
+                return Some(ModuleHandleInfo {
+                    module: module.clone(),
+                    load_library_address: *load_library_address,
+                    module_name_address: *module_name_address,
+                });
             }
         }
         None
