@@ -238,11 +238,11 @@ impl CLikeEmitter {
                     evidence_tags.push("struct-member");
                 }
 
-                // P0-9.5: SSA Operation Behavior Mining
+                // P0-9.6: SSA Behavior Evidence Engine
                 let behavioral_candidate = if in_cluster && **count >= 5 {
                     "struct-field"
                 } else if **count >= 20 {
-                    "IntegerLike (high-frequency state)"
+                    "CounterLike (high-frequency state)"
                 } else if **count >= 10 {
                     "DWORD/state"
                 } else if **count >= 3 {
