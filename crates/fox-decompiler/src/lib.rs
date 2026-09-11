@@ -8,6 +8,7 @@
 
 pub mod condition;
 pub mod control_structure;
+pub mod dynamic_plugin;
 pub mod emitter;
 pub mod expression;
 pub mod structured_ir;
@@ -18,6 +19,10 @@ pub use condition::{
 pub use control_structure::{
     recover_control_structures, ControlStructure, GuardClause, IfElse, StructureEvidence,
     UnknownBranch,
+};
+pub use dynamic_plugin::{
+    build_external_call_name_map, build_iat_map_from_imports, resolutions_to_call_targets,
+    DynamicCallEvidence, DynamicPluginResolver, ResolvedDynamicCall, ResolverStats,
 };
 pub use emitter::{emit_c_like, emit_c_like_clean, CLikeEmitter, EmitterConfig};
 pub use expression::{BinaryOp, CallTarget, Expression, ExpressionRecovery, PhiIncoming, UnaryOp};
