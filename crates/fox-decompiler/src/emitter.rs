@@ -321,6 +321,82 @@ impl CLikeEmitter {
         }
     }
 
+    /// P0-8.1: Try to format a memory address expression as `base->field_OFFSET`.
+    ///
+    /// Recognizes `Binary(Add, Variable(name), Constant(offset))` and
+    /// `Binary(Sub, Variable(name), Constant(offset))` patterns.
+    /// Also recognizes bare `Variable(name)` as `name->field_0`.
+    fn try_field_access(&self, addr: &Expression) -> Option<String> {
+        match addr {
+            Expression::Binary { op, left, right } => {
+                let (base, offset, negative) = match (*op, left.as_ref(), right.as_ref()) {
+                    (
+                        crate::expression::BinaryOp::Add,
+                        Expression::Variable { name, .. },
+                        Expression::Constant(off),
+                    ) => (name.clone(), *off, false),
+                    (
+                        crate::expression::BinaryOp::Add,
+                        Expression::Constant(off),
+                        Expression::Variable { name, .. },
+                    ) => (name.clone(), *off, false),
+                    (
+                        crate::expression::BinaryOp::Sub,
+                        Expression::Variable { name, .. },
+                        Expression::Constant(off),
+                    ) => (name.clone(), *off, true),
+                    _ => return None,
+                };
+                let off_str = if negative {
+                    format!("-0x{:X}", offset)
+                } else {
+                    format!("0x{:X}", offset)
+                };
+                Some(format!("{}->field_{}", base, off_str))
+            }
+            Expression::Variable { name, .. } => {
+                // Bare register as pointer: [eax] -> eax->field_0
+                Some(format!("{}->field_0", name))
+            }
+            _ => None,
+        }
+    }
+
+    /// P0-8.1: Parse "memory operand: [reg+offset]" or "memory operand: [reg]"
+    /// from an Unknown expression reason into `reg->field_OFFSET`.
+    fn try_parse_memory_operand(&self, reason: &str) -> Option<String> {
+        // Expected format: "memory operand: [esi+0x190b8]" or "memory operand: [eax]"
+        let bracket_start = reason.find('[')?;
+        let bracket_end = reason.find(']')?;
+        if bracket_end <= bracket_start + 1 {
+            return None;
+        }
+        let inner = &reason[bracket_start + 1..bracket_end];
+
+        // Try to parse reg+offset or reg-offset
+        if let Some(plus_pos) = inner.find('+') {
+            let reg = inner[..plus_pos].trim();
+            let off_str = inner[plus_pos + 1..].trim();
+            if let Ok(off) = u64::from_str_radix(off_str.trim_start_matches("0x"), 16) {
+                return Some(format!("{}->field_0x{:X}", reg, off));
+            }
+        }
+        if let Some(minus_pos) = inner.find('-') {
+            let reg = inner[..minus_pos].trim();
+            let off_str = inner[minus_pos + 1..].trim();
+            if let Ok(off) = u64::from_str_radix(off_str.trim_start_matches("0x"), 16) {
+                return Some(format!("{}->field_-0x{:X}", reg, off));
+            }
+        }
+
+        // Bare register: [eax] -> eax->field_0
+        if inner.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return Some(format!("{}->field_0", inner));
+        }
+
+        None
+    }
+
     fn fmt_condition(&self, c: &ConditionRecovery) -> String {
         match c {
             ConditionRecovery::Resolved(cond) => format!("{}", cond),
@@ -463,9 +539,21 @@ impl CLikeEmitter {
                 buf.push(')');
             }
             Expression::Load { address } => {
-                buf.push_str("*(");
-                self.fmt_expr_truncated(address, buf, truncated, max_chars, max_depth, depth + 1);
-                buf.push(')');
+                // P0-8.1: Try to format as base->field_OFFSET
+                if let Some(field_access) = self.try_field_access(address) {
+                    buf.push_str(&field_access);
+                } else {
+                    buf.push_str("*(");
+                    self.fmt_expr_truncated(
+                        address,
+                        buf,
+                        truncated,
+                        max_chars,
+                        max_depth,
+                        depth + 1,
+                    );
+                    buf.push(')');
+                }
             }
             Expression::Call { target, arguments } => {
                 buf.push_str("call(");
@@ -514,7 +602,12 @@ impl CLikeEmitter {
                 buf.push(')');
             }
             Expression::Unknown { reason } => {
-                buf.push_str(&format!("<?{}>", reason));
+                // P0-8.1: Parse "memory operand: [reg+offset]" into reg->field_OFFSET
+                if let Some(field_access) = self.try_parse_memory_operand(reason) {
+                    buf.push_str(&field_access);
+                } else {
+                    buf.push_str(&format!("<?{}>", reason));
+                }
             }
         }
     }
