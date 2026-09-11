@@ -97,6 +97,9 @@ pub struct CLikeEmitter {
     /// P0-9.4: SSA behavior evidence per field.
     /// (object, offset) -> (branch_dep, arithmetic, deref, indirect_call)
     field_behavior: RefCell<HashMap<(String, u64), (usize, usize, usize, usize)>>,
+    /// P0-10.1: Function behavior evidence.
+    /// function_addr -> (reads_count, writes_count, calls_count)
+    function_behavior: RefCell<HashMap<u64, (usize, usize, usize)>>,
 }
 
 impl Default for CLikeEmitter {
@@ -115,6 +118,7 @@ impl CLikeEmitter {
             field_types: RefCell::new(HashMap::new()),
             field_patterns: RefCell::new(HashMap::new()),
             field_behavior: RefCell::new(HashMap::new()),
+            function_behavior: RefCell::new(HashMap::new()),
         }
     }
 
@@ -127,6 +131,7 @@ impl CLikeEmitter {
             field_types: RefCell::new(HashMap::new()),
             field_patterns: RefCell::new(HashMap::new()),
             field_behavior: RefCell::new(HashMap::new()),
+            function_behavior: RefCell::new(HashMap::new()),
         }
     }
 
@@ -146,6 +151,11 @@ impl CLikeEmitter {
         self.field_types.borrow_mut().clear();
         self.field_patterns.borrow_mut().clear();
         self.field_behavior.borrow_mut().clear();
+        // P0-10.1: Track function behavior
+        let func_addr = func.address;
+        let mut func_reads = 0usize;
+        let mut func_writes = 0usize;
+        let mut func_calls = 0usize;
         if self.config.show_header {
             let name = func.name.as_deref().unwrap_or("unknown");
             out.push_str(&format!("// Function @ 0x{:X} ({})\n", func.address, name));
@@ -171,6 +181,11 @@ impl CLikeEmitter {
 
         // P0-8.4: Emit structure candidate comment for global objects accessed in this function
         self.emit_structure_candidates(out);
+
+        // P0-10.1: Record function behavior evidence
+        self.function_behavior
+            .borrow_mut()
+            .insert(func_addr, (func_reads, func_writes, func_calls));
 
         out.push_str("}\n");
     }
@@ -322,6 +337,12 @@ impl CLikeEmitter {
                 }
             ));
         }
+        // P0-10.1: Function behavior summary
+        let total_accesses: usize = accesses.values().map(|f| f.values().sum::<usize>()).sum();
+        out.push_str(&format!(
+            "     *   P0-10.1 Function Behavior: {} global field accesses\n",
+            total_accesses
+        ));
         out.push_str("     */\n");
     }
 
