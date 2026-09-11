@@ -76,7 +76,10 @@ fn audit_1_callgraph_evidence_chain() {
             CallTarget::Unknown => unknown_count += 1,
         }
     }
-    println!("Map breakdown: Address={}, Symbol={}, Unknown={}", addr_count, sym_count, unknown_count);
+    println!(
+        "Map breakdown: Address={}, Symbol={}, Unknown={}",
+        addr_count, sym_count, unknown_count
+    );
 
     // Verify: every Direct edge should have Address or Symbol target
     let mut direct_without_target = 0;
@@ -104,8 +107,15 @@ fn audit_1_callgraph_evidence_chain() {
 
     // Sample some external symbols
     println!("\nSample external symbols:");
-    let mut syms: Vec<&String> = call_targets.values()
-        .filter_map(|t| if let CallTarget::Symbol(s) = t { Some(s) } else { None })
+    let mut syms: Vec<&String> = call_targets
+        .values()
+        .filter_map(|t| {
+            if let CallTarget::Symbol(s) = t {
+                Some(s)
+            } else {
+                None
+            }
+        })
         .collect();
     syms.sort();
     syms.dedup();
@@ -125,13 +135,17 @@ fn audit_2_indirect_unknown_reconciliation() {
     let result = analyze_binary(&binary).expect("analyze NtcMach");
 
     println!("=== Audit 2: Indirect Unknown Reconciliation ===");
-    println!("CallGraph indirect_unknown: {}", result.call_graph.indirect_unknown);
+    println!(
+        "CallGraph indirect_unknown: {}",
+        result.call_graph.indirect_unknown
+    );
 
     // Count how many indirect_unknown edges are in functions that successfully decompile
     let call_targets = build_call_targets(&result.call_graph);
 
     // Count unknown targets in map
-    let unknown_in_map: usize = call_targets.values()
+    let unknown_in_map: usize = call_targets
+        .values()
         .filter(|t| matches!(t, CallTarget::Unknown))
         .count();
     println!("Unknown targets in call_targets map: {}", unknown_in_map);
@@ -142,7 +156,10 @@ fn audit_2_indirect_unknown_reconciliation() {
     // 3. Some calls may be deduplicated
 
     // Count calls per function status
-    let ok_funcs: std::collections::HashSet<u64> = result.cfg.function_cfgs.iter()
+    let ok_funcs: std::collections::HashSet<u64> = result
+        .cfg
+        .function_cfgs
+        .iter()
         .map(|f| f.function_address.0)
         .collect();
 
@@ -161,7 +178,10 @@ fn audit_2_indirect_unknown_reconciliation() {
             }
         }
     }
-    println!("Indirect unknown in all functions: {}", unknown_in_all_funcs);
+    println!(
+        "Indirect unknown in all functions: {}",
+        unknown_in_all_funcs
+    );
     println!("Indirect unknown in OK functions: {}", unknown_in_ok_funcs);
     println!("Discrepancy explanation: 1461 = CallGraph total, 1219 = actual output (some in Failed/Degraded funcs, some not in SSA)");
 }
@@ -288,8 +308,14 @@ fn audit_5_external_symbol_mapping() {
             }
         }
     }
-    println!("External without symbol but with address: {}", external_as_addr);
+    println!(
+        "External without symbol but with address: {}",
+        external_as_addr
+    );
     println!("  (These would map to CallTarget::Address, which is acceptable fallback)");
 
-    assert!(malformed == 0, "All external symbols should have dll!func format");
+    assert!(
+        malformed == 0,
+        "All external symbols should have dll!func format"
+    );
 }

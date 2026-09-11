@@ -655,9 +655,10 @@ impl StructuredIRBuilder {
             .iter()
             .take(max_args)
             .map(|&idx| {
-                // Recover the pushed value as an expression.
-                // PUSH source is typically the first operand (read).
-                self.expr_engine.recover_definition(ssa, block_id, idx)
+                // P0-6.11: Use recover_use() to get the PUSH source operand (the
+                // value being pushed), NOT recover_definition() which asks what
+                // the PUSH instruction defines (ESP/memory → always Unknown).
+                self.expr_engine.recover_use(ssa, block_id, idx, 0)
             })
             // P0-6.10: Filter out Unknown expressions — if we can't recover
             // the pushed value, don't pretend it's an argument.
