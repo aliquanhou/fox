@@ -76,6 +76,8 @@ pub enum Statement {
         arguments: Vec<Expression>,
         /// Whether arguments are known to be complete (all PUSHes found).
         arguments_complete: bool,
+        /// P0-7.2.1: Call behavior annotation (return value consumer).
+        behavior: Option<CallBehavior>,
         evidence: StatementEvidence,
     },
     /// Unstructured control flow: /* reason */ goto target;
@@ -143,6 +145,33 @@ pub struct FunctionEvidence {
     pub unknown_statements: usize,
     /// Whether resource budget was hit (truncation occurred).
     pub budget_exhausted: bool,
+}
+
+/// P0-7.2.1: Call behavior annotation.
+///
+/// Describes what happens to the call's return value (eax) after the call.
+/// This is a Consumer Layer — it only organizes existing SSA/Condition facts,
+/// it does not infer business semantics.
+#[derive(Debug, Clone)]
+pub enum CallBehavior {
+    /// Return value used in a condition: call → test/cmp eax → CondJump.
+    ReturnUsedInCondition {
+        /// Recovered condition (from P0-6.3A ConditionRecovery).
+        condition: crate::condition::ConditionRecovery,
+        /// Address of the FLAGS-producing instruction (test/cmp).
+        consumer_instruction: u64,
+        /// Address of the conditional jump.
+        branch_instruction: u64,
+    },
+    /// Return value used by a non-branch instruction (mov, push, add, etc.).
+    ReturnUsedByInstruction {
+        /// Address of the instruction consuming eax.
+        consumer_instruction: u64,
+        /// Op name of the consumer instruction.
+        consumer_op: String,
+    },
+    /// Return value has no consumer within the scan window.
+    NoConsumer,
 }
 
 // ---------------------------------------------------------------------------
@@ -302,10 +331,12 @@ impl StructuredIRBuilder {
                         let target = self.extract_call_target(inst);
                         let (arguments, args_complete) =
                             self.recover_call_arguments(ssa, block_id, inst_idx);
+                        let behavior = self.detect_call_behavior(ssa, block_id, inst_idx);
                         stmts.push(Statement::CallStmt {
                             target,
                             arguments,
                             arguments_complete: args_complete,
+                            behavior,
                             evidence: StatementEvidence {
                                 instruction_addresses: vec![inst.address],
                                 block_ids: vec![block_id],
@@ -671,6 +702,58 @@ impl StructuredIRBuilder {
         (args, complete)
     }
 
+    /// P0-7.2.1: Detect what happens to the call's return value (eax).
+    ///
+    /// Scans forward from the call instruction in the same basic block,
+    /// looking for the first instruction that uses eax.
+    ///
+    /// This is a Consumer Layer — it only organizes existing SSA facts.
+    /// It does NOT infer business semantics or guess API behavior.
+    fn detect_call_behavior(
+        &self,
+        ssa: &SSAFunction,
+        block_id: usize,
+        inst_idx: usize,
+    ) -> Option<CallBehavior> {
+        let block = ssa.basic_blocks.get(block_id)?;
+        // Scan forward up to 8 instructions
+        let scan_limit = (inst_idx + 9).min(block.instructions.len());
+
+        for i in (inst_idx + 1)..scan_limit {
+            let inst = &block.instructions[i];
+
+            // Check if this instruction uses eax (the return register)
+            let uses_eax = inst.operands.iter().any(|op| {
+                matches!(op, fox_analysis::ssa::SSAOperand::Variable { name, .. } if name == "eax")
+            });
+            if !uses_eax {
+                continue;
+            }
+
+            // Case A: test/cmp eax → CondJump (return used in condition)
+            if (inst.op == "Test" || inst.op == "Cmp")
+                && i + 1 < block.instructions.len()
+                && block.instructions[i + 1].op == "CondJump"
+            {
+                let condition = crate::condition::recover_condition(ssa, block_id, i + 1);
+                return Some(CallBehavior::ReturnUsedInCondition {
+                    condition,
+                    consumer_instruction: inst.address,
+                    branch_instruction: block.instructions[i + 1].address,
+                });
+            }
+
+            // Case B: return value used by a regular instruction
+            return Some(CallBehavior::ReturnUsedByInstruction {
+                consumer_instruction: inst.address,
+                consumer_op: inst.op.clone(),
+            });
+        }
+
+        // No consumer found in scan window
+        Some(CallBehavior::NoConsumer)
+    }
+
     fn extract_return_from_block(
         &self,
         cfg: &FunctionCfg,
@@ -800,6 +883,7 @@ impl DecompilerFunction {
                 target,
                 arguments,
                 arguments_complete,
+                behavior,
                 ..
             } => {
                 let args_str: Vec<String> = arguments.iter().map(|a| format!("{}", a)).collect();
@@ -814,12 +898,23 @@ impl DecompilerFunction {
                 } else {
                     format!("{}, ...", args_str.join(", "))
                 };
+                let behavior_comment = match behavior {
+                    Some(CallBehavior::ReturnUsedInCondition { .. }) => {
+                        " /* return used in condition */"
+                    }
+                    Some(CallBehavior::ReturnUsedByInstruction { consumer_op, .. }) => {
+                        &format!(" /* return consumed by {} */", consumer_op)
+                    }
+                    Some(CallBehavior::NoConsumer) => " /* return unused */",
+                    None => "",
+                };
                 writeln!(
                     f,
-                    "{}{}({});",
+                    "{}{}({});{}",
                     indent,
                     Self::fmt_call_target(target),
-                    args_display
+                    args_display,
+                    behavior_comment
                 )
             }
             Statement::Unknown {

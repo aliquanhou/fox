@@ -27,7 +27,7 @@ pub use dynamic_plugin::{
 pub use emitter::{emit_c_like, emit_c_like_clean, CLikeEmitter, EmitterConfig};
 pub use expression::{BinaryOp, CallTarget, Expression, ExpressionRecovery, PhiIncoming, UnaryOp};
 pub use structured_ir::{
-    AssignTarget, DecompilerFunction, FunctionEvidence, Statement, StatementEvidence,
+    AssignTarget, CallBehavior, DecompilerFunction, FunctionEvidence, Statement, StatementEvidence,
     StructuredIRBudget, StructuredIRBuilder, VariableOrigin,
 };
 

@@ -223,6 +223,7 @@ impl CLikeEmitter {
                 target,
                 arguments,
                 arguments_complete,
+                behavior,
                 evidence,
             } => {
                 let ev = self.fmt_evidence(evidence);
@@ -238,11 +239,23 @@ impl CLikeEmitter {
                 } else {
                     format!("{}, ...", args_str.join(", "))
                 };
+                let behavior_comment = match behavior {
+                    Some(crate::structured_ir::CallBehavior::ReturnUsedInCondition { .. }) => {
+                        " /* return used in condition */"
+                    }
+                    Some(crate::structured_ir::CallBehavior::ReturnUsedByInstruction {
+                        consumer_op,
+                        ..
+                    }) => &format!(" /* return consumed by {} */", consumer_op),
+                    Some(crate::structured_ir::CallBehavior::NoConsumer) => " /* return unused */",
+                    None => "",
+                };
                 out.push_str(&format!(
-                    "{}{}({});{}\n",
+                    "{}{}({});{}{}\n",
                     indent,
                     self.fmt_call_target(target),
                     args_display,
+                    behavior_comment,
                     ev
                 ));
             }
