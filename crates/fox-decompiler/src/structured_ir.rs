@@ -68,11 +68,14 @@ pub enum Statement {
         value: Option<Expression>,
         evidence: StatementEvidence,
     },
-    /// call target(/* arguments unresolved */);  // as statement
+    /// call target(args);  // as statement
     CallStmt {
         target: CallTarget,
-        /// Arguments are NOT recovered in P0-6.6A. This exists for future use.
-        arguments_unresolved: bool,
+        /// Recovered arguments (from PUSH instructions before call).
+        /// Empty = no arguments recovered (not necessarily zero args).
+        arguments: Vec<Expression>,
+        /// Whether arguments are known to be complete (all PUSHes found).
+        arguments_complete: bool,
         evidence: StatementEvidence,
     },
     /// Unstructured control flow: /* reason */ goto target;
@@ -198,6 +201,8 @@ impl StructuredIRBudget {
 pub struct StructuredIRBuilder {
     expr_engine: ExpressionRecovery,
     budget: StructuredIRBudget,
+    /// P0-6.10: Resolved call targets from CallGraph, keyed by call instruction address.
+    call_targets: Option<std::collections::HashMap<u64, CallTarget>>,
 }
 
 impl Default for StructuredIRBuilder {
@@ -211,11 +216,22 @@ impl StructuredIRBuilder {
         Self {
             expr_engine: ExpressionRecovery::new(),
             budget: StructuredIRBudget::new(),
+            call_targets: None,
         }
     }
 
     pub fn with_budget(mut self, budget: StructuredIRBudget) -> Self {
         self.budget = budget;
+        self
+    }
+
+    /// P0-6.10: Provide resolved call targets from CallGraph.
+    /// Key = call instruction address, Value = resolved CallTarget.
+    pub fn with_call_targets(
+        mut self,
+        targets: std::collections::HashMap<u64, CallTarget>,
+    ) -> Self {
+        self.call_targets = Some(targets);
         self
     }
 
@@ -284,16 +300,16 @@ impl StructuredIRBuilder {
                             break;
                         }
                         let target = self.extract_call_target(inst);
+                        let (arguments, args_complete) =
+                            self.recover_call_arguments(ssa, block_id, inst_idx);
                         stmts.push(Statement::CallStmt {
                             target,
-                            arguments_unresolved: true,
+                            arguments,
+                            arguments_complete: args_complete,
                             evidence: StatementEvidence {
                                 instruction_addresses: vec![inst.address],
                                 block_ids: vec![block_id],
-                                reason: format!(
-                                    "Call instruction ({}), arguments NOT recovered in P0-6.6A",
-                                    inst.original_mnemonic
-                                ),
+                                reason: format!("Call instruction ({})", inst.original_mnemonic),
                             },
                         });
                         continue;
@@ -569,7 +585,13 @@ impl StructuredIRBuilder {
     }
 
     fn extract_call_target(&self, inst: &fox_analysis::ssa::SSAInstruction) -> CallTarget {
-        // Try to find target from operands
+        // P0-6.10: First check CallGraph-resolved targets (most reliable).
+        if let Some(ref targets) = self.call_targets {
+            if let Some(t) = targets.get(&inst.address) {
+                return t.clone();
+            }
+        }
+        // Fallback: try to find target from SSA operands.
         for op in &inst.operands {
             match op {
                 fox_analysis::ssa::SSAOperand::Label(s) => {
@@ -584,6 +606,67 @@ impl StructuredIRBuilder {
             }
         }
         CallTarget::Unknown
+    }
+
+    /// P0-6.10: Recover call arguments from PUSH instructions immediately before
+    /// the call in the same basic block. Only reliable for cdecl/stdcall stack args.
+    /// Returns (arguments, complete). complete=true means all preceding PUSHes
+    /// were recovered; false means some were skipped/truncated.
+    fn recover_call_arguments(
+        &self,
+        ssa: &SSAFunction,
+        block_id: usize,
+        call_idx: usize,
+    ) -> (Vec<Expression>, bool) {
+        let block = match ssa.basic_blocks.get(block_id) {
+            Some(b) => b,
+            None => return (Vec::new(), false),
+        };
+
+        // Walk backwards from the call instruction, collecting consecutive PUSHes.
+        // Stop at any non-PUSH instruction (except NOP/align padding).
+        let mut push_indices: Vec<usize> = Vec::new();
+        let mut i = call_idx;
+        while i > 0 {
+            i -= 1;
+            let prev = &block.instructions[i];
+            if prev.op == "Push" {
+                push_indices.push(i);
+            } else if prev.op == "Nop" {
+                continue; // skip padding
+            } else {
+                break;
+            }
+        }
+
+        if push_indices.is_empty() {
+            return (Vec::new(), false);
+        }
+
+        // PUSHes are in reverse order: last PUSH = first argument.
+        // push_indices is collected backwards (closest to call first), so reverse it.
+        push_indices.reverse();
+
+        // Limit to 8 args to avoid explosion.
+        let max_args = 8;
+        let complete = push_indices.len() <= max_args;
+        let args: Vec<Expression> = push_indices
+            .iter()
+            .take(max_args)
+            .map(|&idx| {
+                // Recover the pushed value as an expression.
+                // PUSH source is typically the first operand (read).
+                self.expr_engine.recover_definition(ssa, block_id, idx)
+            })
+            // P0-6.10: Filter out Unknown expressions — if we can't recover
+            // the pushed value, don't pretend it's an argument.
+            .filter(|e| !matches!(e, Expression::Unknown { .. }))
+            .collect();
+
+        // If we filtered out args, they're not complete.
+        let complete = complete && args.len() == push_indices.len().min(max_args);
+
+        (args, complete)
     }
 
     fn extract_return_from_block(
@@ -711,12 +794,30 @@ impl DecompilerFunction {
                     writeln!(f, "{}return;", indent)
                 }
             }
-            Statement::CallStmt { target, .. } => {
+            Statement::CallStmt {
+                target,
+                arguments,
+                arguments_complete,
+                ..
+            } => {
+                let args_str: Vec<String> = arguments.iter().map(|a| format!("{}", a)).collect();
+                let args_display = if arguments.is_empty() {
+                    if *arguments_complete {
+                        "".to_string()
+                    } else {
+                        "/* arguments unresolved */".to_string()
+                    }
+                } else if *arguments_complete {
+                    args_str.join(", ")
+                } else {
+                    format!("{}, ...", args_str.join(", "))
+                };
                 writeln!(
                     f,
-                    "{}{}(/* arguments unresolved */);",
+                    "{}{}({});",
                     indent,
-                    Self::fmt_call_target(target)
+                    Self::fmt_call_target(target),
+                    args_display
                 )
             }
             Statement::Unknown {

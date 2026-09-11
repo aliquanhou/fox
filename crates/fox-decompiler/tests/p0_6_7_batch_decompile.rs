@@ -59,6 +59,50 @@ fn batch_decompile_all_ntcmach_functions() {
     let total_functions = result.cfg.function_cfgs.len();
     println!("=== P0-6.7 Batch Decompilation: NtcMach.exe ===");
     println!("Total functions: {}", total_functions);
+    println!("CallGraph: direct_internal={}, direct_external={}, indirect_resolved={}, indirect_unknown={}",
+        result.call_graph.direct_internal, result.call_graph.direct_external,
+        result.call_graph.indirect_resolved, result.call_graph.indirect_unknown);
+    println!("");
+
+    // P0-6.10: Build call target map from CallGraph (key = call instruction address)
+    let call_targets: std::collections::HashMap<u64, fox_decompiler::CallTarget> = {
+        let mut map = std::collections::HashMap::new();
+        for node in &result.call_graph.nodes {
+            for edge in &node.outgoing_calls {
+                use fox_core::edge::CallEdgeKind;
+                let target = match edge.kind {
+                    CallEdgeKind::Direct | CallEdgeKind::External => {
+                        if let Some(ref sym) = edge.resolved_symbol {
+                            // External: "dll!func" -> use just func name
+                            let func_name = sym.split('!').last().unwrap_or(sym);
+                            fox_decompiler::CallTarget::Symbol(func_name.to_string())
+                        } else if let Some(callee) = edge.callee {
+                            fox_decompiler::CallTarget::Address(callee)
+                        } else {
+                            fox_decompiler::CallTarget::Unknown
+                        }
+                    }
+                    CallEdgeKind::Indirect => {
+                        if let Some(ref sym) = edge.resolved_symbol {
+                            let func_name = sym.split('!').last().unwrap_or(sym);
+                            fox_decompiler::CallTarget::Symbol(func_name.to_string())
+                        } else if let Some(callee) = edge.callee {
+                            fox_decompiler::CallTarget::Address(callee)
+                        } else {
+                            fox_decompiler::CallTarget::Unknown
+                        }
+                    }
+                    CallEdgeKind::Unknown => fox_decompiler::CallTarget::Unknown,
+                };
+                map.insert(edge.call_instruction, target);
+            }
+        }
+        map
+    };
+    println!(
+        "P0-6.10: Resolved call targets from CallGraph: {}",
+        call_targets.len()
+    );
     println!("");
 
     let mut results: Vec<FunctionResult> = Vec::new();
@@ -93,7 +137,7 @@ fn batch_decompile_all_ntcmach_functions() {
             );
         }
 
-        let func_result = process_single_function(&result, addr, &name);
+        let func_result = process_single_function(&result, addr, &name, &call_targets);
 
         match func_result.status {
             FunctionStatus::Ok => ok_count += 1,
@@ -305,6 +349,7 @@ fn process_single_function(
     result: &fox_analysis::AnalysisResult,
     addr: u64,
     name: &str,
+    call_targets: &std::collections::HashMap<u64, fox_decompiler::CallTarget>,
 ) -> FunctionResult {
     let func_cfg = match result
         .cfg
@@ -398,7 +443,9 @@ fn process_single_function(
     // Build structured IR with conservative budget
     let mut budget = StructuredIRBudget::default();
     budget.max_statements = 2000; // conservative for batch
-    let mut builder = StructuredIRBuilder::new().with_budget(budget);
+    let mut builder = StructuredIRBuilder::new()
+        .with_budget(budget)
+        .with_call_targets(call_targets.clone());
     let func = builder.build(func_cfg, ssa, cs);
 
     // Count statement types

@@ -221,20 +221,28 @@ impl CLikeEmitter {
 
             Statement::CallStmt {
                 target,
-                arguments_unresolved,
+                arguments,
+                arguments_complete,
                 evidence,
             } => {
                 let ev = self.fmt_evidence(evidence);
-                let args = if *arguments_unresolved {
-                    "/* arguments unresolved */"
+                let args_str: Vec<String> = arguments.iter().map(|a| self.format_expr(a)).collect();
+                let args_display = if arguments.is_empty() {
+                    if *arguments_complete {
+                        "".to_string()
+                    } else {
+                        "/* arguments unresolved */".to_string()
+                    }
+                } else if *arguments_complete {
+                    args_str.join(", ")
                 } else {
-                    ""
+                    format!("{}, ...", args_str.join(", "))
                 };
                 out.push_str(&format!(
                     "{}{}({});{}\n",
                     indent,
                     self.fmt_call_target(target),
-                    args,
+                    args_display,
                     ev
                 ));
             }
