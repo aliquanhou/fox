@@ -89,6 +89,8 @@ pub struct CLikeEmitter {
     /// Used to emit structure candidate comments.
     /// P0-8.5: Now includes access count per offset for evidence.
     field_accesses: RefCell<HashMap<String, HashMap<u64, usize>>>,
+    /// P0-9: Type candidates per field (object -> offset -> type_hint).
+    field_types: RefCell<HashMap<String, HashMap<u64, String>>>,
 }
 
 impl Default for CLikeEmitter {
@@ -104,6 +106,7 @@ impl CLikeEmitter {
             reg_to_global: RefCell::new(HashMap::new()),
             reg_name_to_global: RefCell::new(HashMap::new()),
             field_accesses: RefCell::new(HashMap::new()),
+            field_types: RefCell::new(HashMap::new()),
         }
     }
 
@@ -113,6 +116,7 @@ impl CLikeEmitter {
             reg_to_global: RefCell::new(HashMap::new()),
             reg_name_to_global: RefCell::new(HashMap::new()),
             field_accesses: RefCell::new(HashMap::new()),
+            field_types: RefCell::new(HashMap::new()),
         }
     }
 
@@ -129,6 +133,7 @@ impl CLikeEmitter {
         self.reg_name_to_global.borrow_mut().clear();
         // P0-8.4: Reset field access collection per function
         self.field_accesses.borrow_mut().clear();
+        self.field_types.borrow_mut().clear();
         if self.config.show_header {
             let name = func.name.as_deref().unwrap_or("unknown");
             out.push_str(&format!("// Function @ 0x{:X} ({})\n", func.address, name));
@@ -203,11 +208,19 @@ impl CLikeEmitter {
                 total_accesses
             ));
 
-            // Per-field evidence
+            // Per-field evidence with P0-9 type hints
             for (off, count) in &sorted {
+                // P0-9: Simple type inference based on access patterns
+                let type_hint = if **count >= 10 {
+                    "DWORD/state (high-frequency)"
+                } else if **count >= 3 {
+                    "DWORD (medium-frequency)"
+                } else {
+                    "UNKNOWN"
+                };
                 out.push_str(&format!(
-                    "     *   +0x{:<8X} size:4  accesses:{}\n",
-                    off, count
+                    "     *   +0x{:<8X} size:4  accesses:{:<4} type:{}\n",
+                    off, count, type_hint
                 ));
             }
 
