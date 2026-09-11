@@ -643,9 +643,10 @@ impl StructuredIRBuilder {
             return (Vec::new(), false);
         }
 
-        // PUSHes are in reverse order: last PUSH = first argument.
-        // push_indices is collected backwards (closest to call first), so reverse it.
-        push_indices.reverse();
+        // PUSHes are collected backwards from call: closest PUSH = first arg.
+        // This is already the correct C-like argument order (arg1, arg2, arg3).
+        // DO NOT reverse — that would produce (arg3, arg2, arg1).
+        // P0-6.10 Independent Audit: reverse() was a P1 bug, now removed.
 
         // Limit to 8 args to avoid explosion.
         let max_args = 8;
