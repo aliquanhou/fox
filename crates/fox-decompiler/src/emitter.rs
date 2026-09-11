@@ -337,11 +337,13 @@ impl CLikeEmitter {
                 }
             ));
         }
-        // P0-10.1: Function behavior summary
+        // P0-10.2: Function behavior evidence
         let total_accesses: usize = accesses.values().map(|f| f.values().sum::<usize>()).sum();
+        let total_fields: usize = accesses.values().map(|f| f.len()).sum();
+        let obj_count = accesses.len();
         out.push_str(&format!(
-            "     *   P0-10.1 Function Behavior: {} global field accesses\n",
-            total_accesses
+            "     *   P0-10.2 Function Behavior: {} objects, {} fields, {} accesses\n",
+            obj_count, total_fields, total_accesses
         ));
         out.push_str("     */\n");
     }
