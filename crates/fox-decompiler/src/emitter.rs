@@ -358,6 +358,14 @@ impl CLikeEmitter {
                 // Bare register as pointer: [eax] -> eax->field_0
                 Some(format!("{}->field_0", name))
             }
+            Expression::Constant(addr) => {
+                // P0-8.2: Pure global address constant -> global_XXXXXX
+                if (0x460000..=0x480000).contains(addr) {
+                    Some(format!("global_{:X}", addr))
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }
@@ -414,6 +422,14 @@ impl CLikeEmitter {
                 .unwrap_or(false)
         {
             return Some(format!("{}->field_0", inner));
+        }
+
+        // P0-8.2: Pure constant address [+0x46E920] -> global_46E920
+        // Must look like a hex address in .data section (0x460000-0x480000 range)
+        if let Ok(addr) = u64::from_str_radix(inner.trim_start_matches("0x"), 16) {
+            if (0x460000..=0x480000).contains(&addr) {
+                return Some(format!("global_{:X}", addr));
+            }
         }
 
         None
