@@ -94,6 +94,9 @@ pub struct CLikeEmitter {
     /// P0-9.1: Access pattern evidence per field.
     /// (object, offset) -> (cmp_count, call_count, deref_count, arg_count)
     field_patterns: RefCell<HashMap<(String, u64), (usize, usize, usize, usize)>>,
+    /// P0-9.4: SSA behavior evidence per field.
+    /// (object, offset) -> (branch_dep, arithmetic, deref, indirect_call)
+    field_behavior: RefCell<HashMap<(String, u64), (usize, usize, usize, usize)>>,
 }
 
 impl Default for CLikeEmitter {
@@ -111,6 +114,7 @@ impl CLikeEmitter {
             field_accesses: RefCell::new(HashMap::new()),
             field_types: RefCell::new(HashMap::new()),
             field_patterns: RefCell::new(HashMap::new()),
+            field_behavior: RefCell::new(HashMap::new()),
         }
     }
 
@@ -122,6 +126,7 @@ impl CLikeEmitter {
             field_accesses: RefCell::new(HashMap::new()),
             field_types: RefCell::new(HashMap::new()),
             field_patterns: RefCell::new(HashMap::new()),
+            field_behavior: RefCell::new(HashMap::new()),
         }
     }
 
@@ -140,6 +145,7 @@ impl CLikeEmitter {
         self.field_accesses.borrow_mut().clear();
         self.field_types.borrow_mut().clear();
         self.field_patterns.borrow_mut().clear();
+        self.field_behavior.borrow_mut().clear();
         if self.config.show_header {
             let name = func.name.as_deref().unwrap_or("unknown");
             out.push_str(&format!("// Function @ 0x{:X} ({})\n", func.address, name));
@@ -232,8 +238,7 @@ impl CLikeEmitter {
                     evidence_tags.push("struct-member");
                 }
 
-                // P0-9.3: SSA Behavior Evidence Engine
-                // Based on access patterns and cluster membership
+                // P0-9.4: SSA Usage Pattern Mining
                 let behavioral_candidate = if in_cluster && **count >= 5 {
                     "struct-field"
                 } else if **count >= 20 {
