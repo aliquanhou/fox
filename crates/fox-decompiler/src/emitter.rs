@@ -232,11 +232,12 @@ impl CLikeEmitter {
                     evidence_tags.push("struct-member");
                 }
 
-                // P0-9.2: Behavioral type inference based on access patterns
+                // P0-9.3: SSA Behavior Evidence Engine
+                // Based on access patterns and cluster membership
                 let behavioral_candidate = if in_cluster && **count >= 5 {
                     "struct-field"
                 } else if **count >= 20 {
-                    "BooleanLike (high-frequency state)"
+                    "IntegerLike (high-frequency state)"
                 } else if **count >= 10 {
                     "DWORD/state"
                 } else if **count >= 3 {
@@ -245,7 +246,9 @@ impl CLikeEmitter {
                     "UNKNOWN"
                 };
 
-                let confidence = if **count >= 20 {
+                let confidence = if in_cluster && **count >= 5 {
+                    "MEDIUM"
+                } else if **count >= 20 {
                     "MEDIUM"
                 } else if **count >= 10 {
                     "LOW-MEDIUM"
