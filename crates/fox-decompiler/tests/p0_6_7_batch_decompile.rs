@@ -29,6 +29,7 @@ struct FunctionResult {
     statements: usize,
     output_chars: usize,
     output_lines: usize,
+    output: String,
     has_return: bool,
     has_call: bool,
     has_assign: bool,
@@ -277,6 +278,23 @@ fn batch_decompile_all_ntcmach_functions() {
     // Assertions
     assert!(ok_count > 0, "should have at least some OK functions");
     assert!(total_output_chars > 0, "should produce some output");
+
+    // Write full decompilation output to file for human review
+    let mut full_output = String::new();
+    full_output.push_str(&format!(
+        "// FOX Decompilation: NtcMach.exe\n// Generated: P0-6.9 (expression truncation)\n// Total: {} functions, {} OK, {} degraded, {} failed\n// Total output: {} chars\n\n",
+        total_functions, ok_count, degraded_count, failed_count, total_output_chars
+    ));
+    for r in &results {
+        if r.status == FunctionStatus::Ok {
+            full_output.push_str(&r.output);
+            full_output.push('\n');
+        }
+    }
+    let out_path = std::env::temp_dir().join("ntcmach_decompilation_p0_6_9.c");
+    std::fs::write(&out_path, &full_output).expect("write decompilation output");
+    println!("Full output written to: {}", out_path.display());
+
     println!(
         "PASS: Batch decompilation completed for {} functions",
         total_functions
@@ -308,6 +326,7 @@ fn process_single_function(
                 statements: 0,
                 output_chars: 0,
                 output_lines: 0,
+                output: String::new(),
                 has_return: false,
                 has_call: false,
                 has_assign: false,
@@ -333,6 +352,7 @@ fn process_single_function(
                 statements: 0,
                 output_chars: 0,
                 output_lines: 0,
+                output: String::new(),
                 has_return: false,
                 has_call: false,
                 has_assign: false,
@@ -358,6 +378,7 @@ fn process_single_function(
                 statements: 0,
                 output_chars: 0,
                 output_lines: 0,
+                output: String::new(),
                 has_return: false,
                 has_call: false,
                 has_assign: false,
@@ -498,6 +519,7 @@ fn process_single_function(
         statements: func.statements.len(),
         output_chars,
         output_lines,
+        output,
         has_return,
         has_call,
         has_assign,

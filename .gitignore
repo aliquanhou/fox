@@ -23,3 +23,5 @@ Thumbs.db
 # Temporary
 *.tmp
 *.log
+
+ntcmach_decompilation_*.c
