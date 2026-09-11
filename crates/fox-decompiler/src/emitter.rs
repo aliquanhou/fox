@@ -364,33 +364,55 @@ impl CLikeEmitter {
 
     /// P0-8.1: Parse "memory operand: [reg+offset]" or "memory operand: [reg]"
     /// from an Unknown expression reason into `reg->field_OFFSET`.
+    ///
+    /// Also handles Zydis formats with leading "+": [+eax], [+eax+0x10], [+0x46e920].
+    /// Pure constant addresses like [+0x46e920] are NOT labeled (they are global
+    /// variable access, to be handled by P0-8.2 Global Object Recovery).
     fn try_parse_memory_operand(&self, reason: &str) -> Option<String> {
-        // Expected format: "memory operand: [esi+0x190b8]" or "memory operand: [eax]"
         let bracket_start = reason.find('[')?;
         let bracket_end = reason.find(']')?;
         if bracket_end <= bracket_start + 1 {
             return None;
         }
-        let inner = &reason[bracket_start + 1..bracket_end];
+        let mut inner = &reason[bracket_start + 1..bracket_end];
+
+        // Strip leading "+" (Zydis format: [+eax], [+eax+0x10], [+0x46e920])
+        if inner.starts_with('+') {
+            inner = &inner[1..];
+        }
 
         // Try to parse reg+offset or reg-offset
         if let Some(plus_pos) = inner.find('+') {
             let reg = inner[..plus_pos].trim();
             let off_str = inner[plus_pos + 1..].trim();
-            if let Ok(off) = u64::from_str_radix(off_str.trim_start_matches("0x"), 16) {
-                return Some(format!("{}->field_0x{:X}", reg, off));
+            // Require non-empty register (pure constant like "0x46e920" -> None)
+            if !reg.is_empty() {
+                if let Ok(off) = u64::from_str_radix(off_str.trim_start_matches("0x"), 16) {
+                    return Some(format!("{}->field_0x{:X}", reg, off));
+                }
             }
         }
         if let Some(minus_pos) = inner.find('-') {
             let reg = inner[..minus_pos].trim();
             let off_str = inner[minus_pos + 1..].trim();
-            if let Ok(off) = u64::from_str_radix(off_str.trim_start_matches("0x"), 16) {
-                return Some(format!("{}->field_-0x{:X}", reg, off));
+            if !reg.is_empty() {
+                if let Ok(off) = u64::from_str_radix(off_str.trim_start_matches("0x"), 16) {
+                    return Some(format!("{}->field_-0x{:X}", reg, off));
+                }
             }
         }
 
         // Bare register: [eax] -> eax->field_0
-        if inner.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        // Must be all alphanumeric/underscore, and not a pure hex constant
+        if !inner.is_empty()
+            && inner.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && !inner.starts_with("0x")
+            && !inner
+                .chars()
+                .next()
+                .map(|c| c.is_ascii_digit())
+                .unwrap_or(false)
+        {
             return Some(format!("{}->field_0", inner));
         }
 
