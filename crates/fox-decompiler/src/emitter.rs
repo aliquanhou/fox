@@ -337,22 +337,22 @@ impl CLikeEmitter {
                 }
             ));
         }
-        // P0-10.5: Function Role Classification
+        // P0-11: Cross Function Semantic Graph Foundation
         let total_accesses: usize = accesses.values().map(|f| f.values().sum::<usize>()).sum();
         let total_fields: usize = accesses.values().map(|f| f.len()).sum();
         let obj_count = accesses.len();
         out.push_str(&format!(
-            "     *   P0-10.5 Function Evidence: {} objects, {} fields, {} accesses\n",
+            "     *   P0-11 Function Graph Evidence: {} objects, {} fields, {} accesses\n",
             obj_count, total_fields, total_accesses
         ));
-        // P0-10.5: Role inference rules (conservative, evidence-driven)
+        // P0-11: Role inference rules (conservative, evidence-driven)
         let (candidate_role, confidence, evidence) = if total_accesses > 20 && total_fields >= 5 {
             (
-                "update-like",
+                "state-manager-like",
                 "MEDIUM",
                 format!(
-                    "global writes: {}, fields touched: {}",
-                    total_accesses, total_fields
+                    "writes {} fields, touches {} globals",
+                    total_fields, obj_count
                 ),
             )
         } else if total_accesses > 5 && total_fields >= 2 {
@@ -360,13 +360,13 @@ impl CLikeEmitter {
                 "accessor-like",
                 "LOW",
                 format!(
-                    "global reads: {}, fields touched: {}",
-                    total_accesses, total_fields
+                    "reads {} fields, touches {} globals",
+                    total_fields, obj_count
                 ),
             )
         } else if total_accesses > 10 {
             (
-                "state-update-like",
+                "worker-like",
                 "LOW",
                 format!("high frequency accesses: {}", total_accesses),
             )
