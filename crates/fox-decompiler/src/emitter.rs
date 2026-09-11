@@ -337,33 +337,51 @@ impl CLikeEmitter {
                 }
             ));
         }
-        // P0-10.4: Function semantic recovery evidence
+        // P0-10.5: Function Role Classification
         let total_accesses: usize = accesses.values().map(|f| f.values().sum::<usize>()).sum();
         let total_fields: usize = accesses.values().map(|f| f.len()).sum();
         let obj_count = accesses.len();
         out.push_str(&format!(
-            "     *   P0-10.4 Function Evidence: {} objects, {} fields, {} accesses\n",
+            "     *   P0-10.5 Function Evidence: {} objects, {} fields, {} accesses\n",
             obj_count, total_fields, total_accesses
         ));
-        // P0-10.4: Candidate role inference (conservative)
-        let candidate_role = if total_accesses > 20 {
-            "state-update-like"
-        } else if total_accesses > 5 {
-            "object-accessor-like"
+        // P0-10.5: Role inference rules (conservative, evidence-driven)
+        let (candidate_role, confidence, evidence) = if total_accesses > 20 && total_fields >= 5 {
+            (
+                "update-like",
+                "MEDIUM",
+                format!(
+                    "global writes: {}, fields touched: {}",
+                    total_accesses, total_fields
+                ),
+            )
+        } else if total_accesses > 5 && total_fields >= 2 {
+            (
+                "accessor-like",
+                "LOW",
+                format!(
+                    "global reads: {}, fields touched: {}",
+                    total_accesses, total_fields
+                ),
+            )
+        } else if total_accesses > 10 {
+            (
+                "state-update-like",
+                "LOW",
+                format!("high frequency accesses: {}", total_accesses),
+            )
         } else {
-            "UNKNOWN"
-        };
-        let confidence = if total_accesses > 20 {
-            "MEDIUM"
-        } else if total_accesses > 5 {
-            "LOW"
-        } else {
-            "NONE"
+            (
+                "UNKNOWN",
+                "NONE",
+                format!("insufficient evidence: {} accesses", total_accesses),
+            )
         };
         out.push_str(&format!(
             "     *   Candidate Role: {} ({} confidence)\n",
             candidate_role, confidence
         ));
+        out.push_str(&format!("     *   Evidence: {}\n", evidence));
         out.push_str("     */\n");
     }
 
