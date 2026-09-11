@@ -85,9 +85,10 @@ pub struct CLikeEmitter {
     /// the latest SSA version of that register holds the global. If the register is
     /// reassigned to a non-global value, this entry is removed.
     reg_name_to_global: RefCell<HashMap<String, String>>,
-    /// P0-8.4: Collects field offsets accessed on each global object, per function.
-    /// Used to emit structure candidate comments at the end of each function.
-    field_accesses: RefCell<HashMap<String, Vec<u64>>>,
+    /// P0-8.4/8.5: Collects field offsets accessed on each global object.
+    /// Used to emit structure candidate comments.
+    /// P0-8.5: Now includes access count per offset for evidence.
+    field_accesses: RefCell<HashMap<String, HashMap<u64, usize>>>,
 }
 
 impl Default for CLikeEmitter {
@@ -128,7 +129,6 @@ impl CLikeEmitter {
         self.reg_name_to_global.borrow_mut().clear();
         // P0-8.4: Reset field access collection per function
         self.field_accesses.borrow_mut().clear();
-
         if self.config.show_header {
             let name = func.name.as_deref().unwrap_or("unknown");
             out.push_str(&format!("// Function @ 0x{:X} ({})\n", func.address, name));
@@ -158,35 +158,37 @@ impl CLikeEmitter {
         out.push_str("}\n");
     }
 
-    /// P0-8.4: Emit structure field clustering as a comment block.
+    /// P0-8.4/8.5: Emit structure field clustering as a comment block.
+    /// P0-8.5: Includes access counts, array detection, and confidence.
     fn emit_structure_candidates(&self, out: &mut String) {
         let accesses = self.field_accesses.borrow();
         if accesses.is_empty() {
             return;
         }
 
-        out.push_str("    /* P0-8.4 Structure Candidates:\n");
-        for (obj, offsets) in accesses.iter() {
-            // Deduplicate and sort offsets
-            let mut sorted: Vec<u64> = offsets.clone();
-            sorted.sort_unstable();
-            sorted.dedup();
+        out.push_str("    /* P0-8.5 Structure Evidence:\n");
+        for (obj, fields) in accesses.iter() {
+            // Sort offsets
+            let mut sorted: Vec<(&u64, &usize)> = fields.iter().collect();
+            sorted.sort_by(|a, b| a.0.cmp(b.0));
+
+            let total_accesses: usize = sorted.iter().map(|(_, c)| **c).sum();
 
             // Cluster consecutive offsets (step 4 bytes = DWORD)
             let mut clusters: Vec<Vec<u64>> = Vec::new();
             let mut current: Vec<u64> = Vec::new();
-            for &off in &sorted {
+            for (off, _) in &sorted {
                 if current.is_empty() {
-                    current.push(off);
+                    current.push(**off);
                 } else {
                     let last = *current.last().unwrap();
-                    if off - last == 4 {
-                        current.push(off);
+                    if **off - last == 4 {
+                        current.push(**off);
                     } else {
                         if current.len() >= 2 {
                             clusters.push(current);
                         }
-                        current = vec![off];
+                        current = vec![**off];
                     }
                 }
             }
@@ -195,28 +197,66 @@ impl CLikeEmitter {
             }
 
             out.push_str(&format!("     * Object: {}\n", obj));
-            out.push_str(&format!("     *   Fields ({} unique):", sorted.len()));
-            for (i, off) in sorted.iter().enumerate() {
-                if i % 8 == 0 {
-                    out.push_str("\n     *     ");
-                }
-                out.push_str(&format!(" +0x{:X}", off));
+            out.push_str(&format!(
+                "     *   Fields: {} unique, {} total accesses\n",
+                sorted.len(),
+                total_accesses
+            ));
+
+            // Per-field evidence
+            for (off, count) in &sorted {
+                out.push_str(&format!(
+                    "     *   +0x{:<8X} size:4  accesses:{}\n",
+                    off, count
+                ));
             }
-            out.push_str("\n");
+
+            // Clusters
+            let mut array_clusters = 0;
+            let mut struct_clusters = 0;
             if !clusters.is_empty() {
                 out.push_str(&format!("     *   Clusters ({}):", clusters.len()));
                 for c in &clusters {
                     let size = (c.last().unwrap() - c.first().unwrap()) + 4;
-                    out.push_str(&format!(
-                        " +0x{:X}..+0x{:X} ({} bytes, {} fields)",
-                        c.first().unwrap(),
-                        c.last().unwrap(),
-                        size,
-                        c.len()
-                    ));
+                    if c.len() >= 8 {
+                        array_clusters += 1;
+                        out.push_str(&format!(
+                            " +0x{:X}..+0x{:X} (POSSIBLE_ARRAY, {} elements)",
+                            c.first().unwrap(),
+                            c.last().unwrap(),
+                            c.len()
+                        ));
+                    } else {
+                        struct_clusters += 1;
+                        out.push_str(&format!(
+                            " +0x{:X}..+0x{:X} ({} bytes, {} fields)",
+                            c.first().unwrap(),
+                            c.last().unwrap(),
+                            size,
+                            c.len()
+                        ));
+                    }
                 }
                 out.push_str("\n");
             }
+
+            // Confidence
+            let confidence = if sorted.len() >= 3 && struct_clusters > 0 {
+                "MEDIUM"
+            } else if sorted.len() >= 1 {
+                "LOW"
+            } else {
+                "NONE"
+            };
+            out.push_str(&format!(
+                "     *   Confidence: {}{}\n",
+                confidence,
+                if array_clusters > 0 {
+                    " (contains possible arrays)"
+                } else {
+                    ""
+                }
+            ));
         }
         out.push_str("     */\n");
     }
@@ -511,11 +551,13 @@ impl CLikeEmitter {
                 if let Some(global) = self.reg_to_global.borrow().get(&key) {
                     // P0-8.4: Record field access on global object
                     if !negative && offset > 0 && offset < 0x1000000 {
-                        self.field_accesses
+                        *self
+                            .field_accesses
                             .borrow_mut()
                             .entry(global.clone())
                             .or_default()
-                            .push(offset);
+                            .entry(offset)
+                            .or_insert(0) += 1;
                     }
                     return Some(format!("{}->field_{}", global, off_str));
                 }
@@ -572,11 +614,13 @@ impl CLikeEmitter {
                     if let Some(global) = self.reg_name_to_global.borrow().get(reg) {
                         // P0-8.4: Record field access on global object
                         if off > 0 && off < 0x1000000 {
-                            self.field_accesses
+                            *self
+                                .field_accesses
                                 .borrow_mut()
                                 .entry(global.clone())
                                 .or_default()
-                                .push(off);
+                                .entry(off)
+                                .or_insert(0) += 1;
                         }
                         return Some(format!("{}->field_0x{:X}", global, off));
                     }
