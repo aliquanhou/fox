@@ -337,15 +337,15 @@ impl CLikeEmitter {
                 }
             ));
         }
-        // P0-10.3: Function semantic evidence
+        // P0-10.4: Function semantic recovery evidence
         let total_accesses: usize = accesses.values().map(|f| f.values().sum::<usize>()).sum();
         let total_fields: usize = accesses.values().map(|f| f.len()).sum();
         let obj_count = accesses.len();
         out.push_str(&format!(
-            "     *   P0-10.3 Function Evidence: {} objects, {} fields, {} accesses\n",
+            "     *   P0-10.4 Function Evidence: {} objects, {} fields, {} accesses\n",
             obj_count, total_fields, total_accesses
         ));
-        // P0-10.3: Candidate role inference (conservative)
+        // P0-10.4: Candidate role inference (conservative)
         let candidate_role = if total_accesses > 20 {
             "state-update-like"
         } else if total_accesses > 5 {
