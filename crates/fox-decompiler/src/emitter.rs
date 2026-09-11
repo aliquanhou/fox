@@ -232,20 +232,32 @@ impl CLikeEmitter {
                     evidence_tags.push("struct-member");
                 }
 
-                // Determine candidate type
-                let type_candidate = if in_cluster && **count >= 5 {
-                    "struct-field (MEDIUM confidence)"
+                // P0-9.2: Behavioral type inference based on access patterns
+                let behavioral_candidate = if in_cluster && **count >= 5 {
+                    "struct-field"
+                } else if **count >= 20 {
+                    "BooleanLike (high-frequency state)"
                 } else if **count >= 10 {
-                    "DWORD/state (MEDIUM confidence)"
+                    "DWORD/state"
                 } else if **count >= 3 {
-                    "DWORD (LOW confidence)"
+                    "DWORD"
                 } else {
-                    "UNKNOWN (insufficient evidence)"
+                    "UNKNOWN"
+                };
+
+                let confidence = if **count >= 20 {
+                    "MEDIUM"
+                } else if **count >= 10 {
+                    "LOW-MEDIUM"
+                } else if **count >= 3 {
+                    "LOW"
+                } else {
+                    "insufficient"
                 };
 
                 out.push_str(&format!(
-                    "     *   +0x{:<8X} size:4  accesses:{:<4} candidate:{}\n",
-                    off, count, type_candidate
+                    "     *   +0x{:<8X} size:4  accesses:{:<4} candidate:{} ({} confidence)\n",
+                    off, count, behavioral_candidate, confidence
                 ));
                 if !evidence_tags.is_empty() {
                     out.push_str(&format!(
