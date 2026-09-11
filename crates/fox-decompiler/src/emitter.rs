@@ -16,6 +16,8 @@
 use crate::condition::ConditionRecovery;
 use crate::expression::{CallTarget, Expression};
 use crate::structured_ir::{AssignTarget, DecompilerFunction, Statement, StatementEvidence};
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 /// Emitter configuration.
 #[derive(Debug, Clone)]
@@ -76,6 +78,15 @@ impl EmitterConfig {
 /// C-like pseudocode emitter.
 pub struct CLikeEmitter {
     config: EmitterConfig,
+    /// P0-8.3: Maps SSA register names (e.g. "ecx_7") to global names (e.g. "global_46E920").
+    /// Reset per function. When a register is reassigned, its entry is removed.
+    reg_to_global: RefCell<HashMap<String, String>>,
+    /// P0-8.3: Maps bare register names (e.g. "ecx") to global names, but ONLY when
+    /// the latest SSA version of that register holds the global. If the register is
+    /// reassigned to a non-global value, this entry is removed.
+    /// This allows safe propagation through Unknown memory operands that only
+    /// carry the bare register name without SSA version.
+    reg_name_to_global: RefCell<HashMap<String, String>>,
 }
 
 impl Default for CLikeEmitter {
@@ -88,11 +99,17 @@ impl CLikeEmitter {
     pub fn new() -> Self {
         Self {
             config: EmitterConfig::default(),
+            reg_to_global: RefCell::new(HashMap::new()),
+            reg_name_to_global: RefCell::new(HashMap::new()),
         }
     }
 
     pub fn with_config(config: EmitterConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            reg_to_global: RefCell::new(HashMap::new()),
+            reg_name_to_global: RefCell::new(HashMap::new()),
+        }
     }
 
     /// Emit a DecompilerFunction as C-like pseudocode string.
@@ -103,6 +120,10 @@ impl CLikeEmitter {
     }
 
     fn emit_function(&self, func: &DecompilerFunction, out: &mut String) {
+        // P0-8.3: Reset register-to-global mapping per function
+        self.reg_to_global.borrow_mut().clear();
+        self.reg_name_to_global.borrow_mut().clear();
+
         if self.config.show_header {
             let name = func.name.as_deref().unwrap_or("unknown");
             out.push_str(&format!("// Function @ 0x{:X} ({})\n", func.address, name));
@@ -135,10 +156,31 @@ impl CLikeEmitter {
         match stmt {
             Statement::Assign { lhs, rhs, evidence } => {
                 let ev = self.fmt_evidence(evidence);
+                let lhs_name = self.fmt_target(lhs);
+                // P0-8.3: Track if this assignment sets a register to a global object
+                if let Some(global) = self.expr_is_global(rhs) {
+                    self.reg_to_global
+                        .borrow_mut()
+                        .insert(lhs_name.clone(), global.clone());
+                    // Also track bare register name (strip _version suffix)
+                    if let Some(underscore) = lhs_name.rfind('_') {
+                        let bare_name = &lhs_name[..underscore];
+                        self.reg_name_to_global
+                            .borrow_mut()
+                            .insert(bare_name.to_string(), global);
+                    }
+                } else {
+                    self.reg_to_global.borrow_mut().remove(&lhs_name);
+                    // If this register is reassigned to non-global, clear its name mapping
+                    if let Some(underscore) = lhs_name.rfind('_') {
+                        let bare_name = &lhs_name[..underscore];
+                        self.reg_name_to_global.borrow_mut().remove(bare_name);
+                    }
+                }
                 out.push_str(&format!(
                     "{}{} = {};{}\n",
                     indent,
-                    self.fmt_target(lhs),
+                    lhs_name,
                     self.format_expr(rhs),
                     ev
                 ));
@@ -321,40 +363,91 @@ impl CLikeEmitter {
         }
     }
 
+    /// P0-8.3: Check if an expression evaluates to a global object name.
+    /// Returns Some("global_XXXXXX") if rhs is a pure global constant address.
+    fn expr_is_global(&self, expr: &Expression) -> Option<String> {
+        match expr {
+            Expression::Constant(addr) if (0x460000..=0x480000).contains(addr) => {
+                Some(format!("global_{:X}", addr))
+            }
+            Expression::Load { address } => {
+                if let Expression::Constant(addr) = address.as_ref() {
+                    if (0x460000..=0x480000).contains(addr) {
+                        return Some(format!("global_{:X}", addr));
+                    }
+                }
+                None
+            }
+            Expression::Unknown { reason } => {
+                // P0-8.2: Check if try_parse_memory_operand would produce global_XXXXXX
+                let bracket_start = reason.find('[')?;
+                let bracket_end = reason.find(']')?;
+                if bracket_end <= bracket_start + 1 {
+                    return None;
+                }
+                let mut inner = &reason[bracket_start + 1..bracket_end];
+                if inner.starts_with('+') {
+                    inner = &inner[1..];
+                }
+                if let Ok(addr) = u64::from_str_radix(inner.trim_start_matches("0x"), 16) {
+                    if (0x460000..=0x480000).contains(&addr) {
+                        return Some(format!("global_{:X}", addr));
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
     /// P0-8.1: Try to format a memory address expression as `base->field_OFFSET`.
     ///
     /// Recognizes `Binary(Add, Variable(name), Constant(offset))` and
     /// `Binary(Sub, Variable(name), Constant(offset))` patterns.
     /// Also recognizes bare `Variable(name)` as `name->field_0`.
+    ///
+    /// P0-8.3: If the base register SSA version is tracked as a global object,
+    /// outputs `global_XXXXXX->field_OFFSET` instead of `reg_ver->field_OFFSET`.
     fn try_field_access(&self, addr: &Expression) -> Option<String> {
         match addr {
             Expression::Binary { op, left, right } => {
-                let (base, offset, negative) = match (*op, left.as_ref(), right.as_ref()) {
-                    (
-                        crate::expression::BinaryOp::Add,
-                        Expression::Variable { name, .. },
-                        Expression::Constant(off),
-                    ) => (name.clone(), *off, false),
-                    (
-                        crate::expression::BinaryOp::Add,
-                        Expression::Constant(off),
-                        Expression::Variable { name, .. },
-                    ) => (name.clone(), *off, false),
-                    (
-                        crate::expression::BinaryOp::Sub,
-                        Expression::Variable { name, .. },
-                        Expression::Constant(off),
-                    ) => (name.clone(), *off, true),
-                    _ => return None,
-                };
+                let (base_name, base_version, offset, negative) =
+                    match (*op, left.as_ref(), right.as_ref()) {
+                        (
+                            crate::expression::BinaryOp::Add,
+                            Expression::Variable { name, version },
+                            Expression::Constant(off),
+                        ) => (name.clone(), *version, *off, false),
+                        (
+                            crate::expression::BinaryOp::Add,
+                            Expression::Constant(off),
+                            Expression::Variable { name, version },
+                        ) => (name.clone(), *version, *off, false),
+                        (
+                            crate::expression::BinaryOp::Sub,
+                            Expression::Variable { name, version },
+                            Expression::Constant(off),
+                        ) => (name.clone(), *version, *off, true),
+                        _ => return None,
+                    };
                 let off_str = if negative {
                     format!("-0x{:X}", offset)
                 } else {
                     format!("0x{:X}", offset)
                 };
-                Some(format!("{}->field_{}", base, off_str))
+                // P0-8.3: Check if this register version points to a global object
+                let key = format!("{}_{}", base_name, base_version);
+                if let Some(global) = self.reg_to_global.borrow().get(&key) {
+                    return Some(format!("{}->field_{}", global, off_str));
+                }
+                Some(format!("{}->field_{}", base_name, off_str))
             }
-            Expression::Variable { name, .. } => {
+            Expression::Variable { name, version } => {
+                // P0-8.3: Check if this register version points to a global object
+                let key = format!("{}_{}", name, version);
+                if let Some(global) = self.reg_to_global.borrow().get(&key) {
+                    return Some(format!("{}->field_0", global));
+                }
                 // Bare register as pointer: [eax] -> eax->field_0
                 Some(format!("{}->field_0", name))
             }
@@ -396,6 +489,10 @@ impl CLikeEmitter {
             // Require non-empty register (pure constant like "0x46e920" -> None)
             if !reg.is_empty() {
                 if let Ok(off) = u64::from_str_radix(off_str.trim_start_matches("0x"), 16) {
+                    // P0-8.3: Check if this register name currently points to a global object
+                    if let Some(global) = self.reg_name_to_global.borrow().get(reg) {
+                        return Some(format!("{}->field_0x{:X}", global, off));
+                    }
                     return Some(format!("{}->field_0x{:X}", reg, off));
                 }
             }
@@ -405,6 +502,10 @@ impl CLikeEmitter {
             let off_str = inner[minus_pos + 1..].trim();
             if !reg.is_empty() {
                 if let Ok(off) = u64::from_str_radix(off_str.trim_start_matches("0x"), 16) {
+                    // P0-8.3: Check if this register name currently points to a global object
+                    if let Some(global) = self.reg_name_to_global.borrow().get(reg) {
+                        return Some(format!("{}->field_-0x{:X}", global, off));
+                    }
                     return Some(format!("{}->field_-0x{:X}", reg, off));
                 }
             }
@@ -421,6 +522,10 @@ impl CLikeEmitter {
                 .map(|c| c.is_ascii_digit())
                 .unwrap_or(false)
         {
+            // P0-8.3: Check if this register name currently points to a global object
+            if let Some(global) = self.reg_name_to_global.borrow().get(inner) {
+                return Some(format!("{}->field_0", global));
+            }
             return Some(format!("{}->field_0", inner));
         }
 
