@@ -148,16 +148,17 @@ impl CLikeEmitter {
                 condition,
                 then_body,
                 else_body,
+                lifted_call,
                 evidence,
                 ..
             } => {
                 let ev = self.fmt_evidence(evidence);
-                out.push_str(&format!(
-                    "{}if ({}) {{{}\n",
-                    indent,
-                    self.fmt_condition(condition),
-                    ev
-                ));
+                let cond_str = if let Some(lc) = lifted_call {
+                    self.fmt_lifted_condition(condition, lc)
+                } else {
+                    self.fmt_condition(condition)
+                };
+                out.push_str(&format!("{}if ({}) {{{}\n", indent, cond_str, ev));
 
                 for s in then_body {
                     self.emit_statement(s, depth + 1, out);
@@ -177,15 +178,16 @@ impl CLikeEmitter {
                 condition,
                 body,
                 return_value,
+                lifted_call,
                 evidence,
             } => {
                 let ev = self.fmt_evidence(evidence);
-                out.push_str(&format!(
-                    "{}if ({}) {{{}\n",
-                    indent,
-                    self.fmt_condition(condition),
-                    ev
-                ));
+                let cond_str = if let Some(lc) = lifted_call {
+                    self.fmt_lifted_condition(condition, lc)
+                } else {
+                    self.fmt_condition(condition)
+                };
+                out.push_str(&format!("{}if ({}) {{{}\n", indent, cond_str, ev));
 
                 for s in body {
                     self.emit_statement(s, depth + 1, out);
@@ -329,6 +331,56 @@ impl CLikeEmitter {
                 "/* condition: FLAGS producer not found */".to_string()
             }
             ConditionRecovery::NotConditionalJump => "/* not a conditional jump */".to_string(),
+        }
+    }
+
+    /// P0-7.3: Format condition with lifted call expression.
+    fn fmt_lifted_condition(
+        &self,
+        c: &ConditionRecovery,
+        lc: &crate::structured_ir::LiftedCall,
+    ) -> String {
+        let call_str = {
+            let args: Vec<String> = lc.arguments.iter().map(|a| self.format_expr(a)).collect();
+            let args_display = if args.is_empty() {
+                "".to_string()
+            } else {
+                args.join(", ")
+            };
+            format!("{}({})", self.fmt_call_target(&lc.target), args_display)
+        };
+
+        match c {
+            ConditionRecovery::Resolved(cond) => {
+                let op_str = match cond.operator {
+                    fox_ir::JumpCondition::Equal => "==",
+                    fox_ir::JumpCondition::NotEqual => "!=",
+                    fox_ir::JumpCondition::SignedLess => "<",
+                    fox_ir::JumpCondition::SignedLessEqual => "<=",
+                    fox_ir::JumpCondition::SignedGreater => ">",
+                    fox_ir::JumpCondition::SignedGreaterEqual => ">=",
+                    fox_ir::JumpCondition::UnsignedLess => "<",
+                    fox_ir::JumpCondition::UnsignedLessEqual => "<=",
+                    fox_ir::JumpCondition::UnsignedGreater => ">",
+                    fox_ir::JumpCondition::UnsignedGreaterEqual => ">=",
+                    _ => return self.fmt_condition(c),
+                };
+                if cond.is_test {
+                    format!("{} {} 0", call_str, op_str)
+                } else {
+                    let right_str = match &cond.right {
+                        crate::condition::ConditionOperand::Constant(v) => {
+                            format!("0x{:X}", v)
+                        }
+                        crate::condition::ConditionOperand::Register { name, version } => {
+                            format!("{}.v{}", name, version)
+                        }
+                        other => format!("{}", other),
+                    };
+                    format!("{} {} {}", call_str, op_str, right_str)
+                }
+            }
+            _ => self.fmt_condition(c),
         }
     }
 

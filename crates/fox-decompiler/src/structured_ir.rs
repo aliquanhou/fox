@@ -54,6 +54,8 @@ pub enum Statement {
         then_body: Vec<Statement>,
         else_body: Vec<Statement>,
         merge_block: Option<usize>,
+        /// P0-7.3: Lifted call expression (call + test eax + jcc merged into if(call())).
+        lifted_call: Option<LiftedCall>,
         evidence: StatementEvidence,
     },
     /// if (condition) { return ... };  // guard clause / early return
@@ -61,6 +63,8 @@ pub enum Statement {
         condition: ConditionRecovery,
         body: Vec<Statement>,
         return_value: Option<Expression>,
+        /// P0-7.3: Lifted call expression.
+        lifted_call: Option<LiftedCall>,
         evidence: StatementEvidence,
     },
     /// return [value];
@@ -172,6 +176,21 @@ pub enum CallBehavior {
     },
     /// Return value has no consumer within the scan window.
     NoConsumer,
+}
+
+/// P0-7.3: A call expression lifted into a condition.
+///
+/// When `call foo; test eax,eax; je label` is detected, the CallStmt is
+/// removed from the statement list and merged into the If/GuardClause as
+/// `if (foo() == 0) { ... }`.
+#[derive(Debug, Clone)]
+pub struct LiftedCall {
+    /// Call target.
+    pub target: CallTarget,
+    /// Recovered arguments.
+    pub arguments: Vec<Expression>,
+    /// Original call instruction address (for evidence).
+    pub call_address: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -413,6 +432,13 @@ impl StructuredIRBuilder {
                     structure_body_blocks.insert(if_else.then_block);
                     structure_body_blocks.insert(if_else.else_block);
 
+                    // P0-7.3: Try to lift call into condition
+                    let lifted_call = self.try_lift_call_into_condition(
+                        &mut block_statements,
+                        if_else.branch_block,
+                        &if_else.condition,
+                    );
+
                     if self.budget.allocate() {
                         branch_to_structure.insert(
                             if_else.branch_block,
@@ -421,6 +447,7 @@ impl StructuredIRBuilder {
                                 then_body,
                                 else_body,
                                 merge_block: if_else.merge_block,
+                                lifted_call,
                                 evidence: Self::structure_evidence(
                                     &if_else.evidence,
                                     "If/Else with bounded common merge",
@@ -435,6 +462,13 @@ impl StructuredIRBuilder {
                     structure_body_blocks.insert(guard.body_block);
                     structure_body_blocks.insert(guard.return_block);
 
+                    // P0-7.3: Try to lift call into condition
+                    let lifted_call = self.try_lift_call_into_condition(
+                        &mut block_statements,
+                        guard.branch_block,
+                        &guard.condition,
+                    );
+
                     if self.budget.allocate() {
                         branch_to_structure.insert(
                             guard.branch_block,
@@ -442,6 +476,7 @@ impl StructuredIRBuilder {
                                 condition: guard.condition.clone(),
                                 body,
                                 return_value,
+                                lifted_call,
                                 evidence: Self::structure_evidence(
                                     &guard.evidence,
                                     "Guard clause / early return (immediate CFG Return edge)",
@@ -754,6 +789,74 @@ impl StructuredIRBuilder {
         Some(CallBehavior::NoConsumer)
     }
 
+    /// P0-7.3: Try to lift a CallStmt into a condition.
+    ///
+    /// If the condition's left operand is eax and there's a CallStmt in the
+    /// branch block whose ReturnUsedInCondition.consumer_instruction matches
+    /// the condition's flags_producer_address, remove the CallStmt and return
+    /// it as a LiftedCall.
+    ///
+    /// Only supports Pattern 1 (test eax,eax -> je/jne) and Pattern 2
+    /// (cmp eax,X -> jcc). Fail-closed: if anything doesn't match, return None.
+    fn try_lift_call_into_condition(
+        &self,
+        block_statements: &mut std::collections::HashMap<usize, Vec<Statement>>,
+        branch_block: usize,
+        condition: &ConditionRecovery,
+    ) -> Option<LiftedCall> {
+        // Condition must be Resolved
+        let cond = match condition {
+            ConditionRecovery::Resolved(c) => c,
+            _ => return None,
+        };
+
+        // Left operand must be eax (the return register)
+        let left_is_eax = matches!(
+            &cond.left,
+            crate::condition::ConditionOperand::Register { name, .. } if name == "eax"
+        );
+        if !left_is_eax {
+            return None;
+        }
+
+        // Find CallStmt in branch block with matching consumer_instruction
+        let stmts = block_statements.get_mut(&branch_block)?;
+        let call_idx = stmts.iter().position(|s| {
+            if let Statement::CallStmt {
+                behavior:
+                    Some(CallBehavior::ReturnUsedInCondition {
+                        consumer_instruction,
+                        ..
+                    }),
+                ..
+            } = s
+            {
+                *consumer_instruction == cond.flags_producer_address
+            } else {
+                false
+            }
+        })?;
+
+        // Extract the CallStmt
+        let call_stmt = stmts.remove(call_idx);
+        if let Statement::CallStmt {
+            target,
+            arguments,
+            evidence,
+            ..
+        } = call_stmt
+        {
+            let call_address = evidence.instruction_addresses.first().copied().unwrap_or(0);
+            Some(LiftedCall {
+                target,
+                arguments,
+                call_address,
+            })
+        } else {
+            None
+        }
+    }
+
     fn extract_return_from_block(
         &self,
         cfg: &FunctionCfg,
@@ -841,9 +944,15 @@ impl DecompilerFunction {
                 condition,
                 then_body,
                 else_body,
+                lifted_call,
                 ..
             } => {
-                writeln!(f, "{}if ({}) {{", indent, Self::fmt_condition(condition))?;
+                let cond_str = if let Some(lc) = lifted_call {
+                    Self::fmt_lifted_condition(condition, lc)
+                } else {
+                    Self::fmt_condition(condition)
+                };
+                writeln!(f, "{}if ({}) {{", indent, cond_str)?;
                 for s in then_body {
                     Self::fmt_statement(f, s, depth + 1)?;
                 }
@@ -859,9 +968,15 @@ impl DecompilerFunction {
                 condition,
                 body,
                 return_value,
+                lifted_call,
                 ..
             } => {
-                writeln!(f, "{}if ({}) {{", indent, Self::fmt_condition(condition))?;
+                let cond_str = if let Some(lc) = lifted_call {
+                    Self::fmt_lifted_condition(condition, lc)
+                } else {
+                    Self::fmt_condition(condition)
+                };
+                writeln!(f, "{}if ({}) {{", indent, cond_str)?;
                 for s in body {
                     Self::fmt_statement(f, s, depth + 1)?;
                 }
@@ -970,6 +1085,56 @@ impl DecompilerFunction {
                 "/* condition: FLAGS producer not found */".to_string()
             }
             ConditionRecovery::NotConditionalJump => "/* not a conditional jump */".to_string(),
+        }
+    }
+
+    /// P0-7.3: Format a condition with a lifted call expression.
+    ///
+    /// Replaces the eax left operand with the call expression.
+    /// Pattern 1 (test eax,eax): `(call() & call()) == 0` → `call() == 0`
+    /// Pattern 2 (cmp eax,X): `eax != 0xX` → `call() != 0xX`
+    fn fmt_lifted_condition(c: &ConditionRecovery, lc: &LiftedCall) -> String {
+        let call_str = {
+            let args: Vec<String> = lc.arguments.iter().map(|a| format!("{}", a)).collect();
+            let args_display = if args.is_empty() {
+                "".to_string()
+            } else {
+                args.join(", ")
+            };
+            format!("{}({})", Self::fmt_call_target(&lc.target), args_display)
+        };
+
+        match c {
+            ConditionRecovery::Resolved(cond) => {
+                let op_str = match cond.operator {
+                    fox_ir::JumpCondition::Equal => "==",
+                    fox_ir::JumpCondition::NotEqual => "!=",
+                    fox_ir::JumpCondition::SignedLess => "<",
+                    fox_ir::JumpCondition::SignedLessEqual => "<=",
+                    fox_ir::JumpCondition::SignedGreater => ">",
+                    fox_ir::JumpCondition::SignedGreaterEqual => ">=",
+                    fox_ir::JumpCondition::UnsignedLess => "<",
+                    fox_ir::JumpCondition::UnsignedLessEqual => "<=",
+                    fox_ir::JumpCondition::UnsignedGreater => ">",
+                    fox_ir::JumpCondition::UnsignedGreaterEqual => ">=",
+                    _ => return Self::fmt_condition(c),
+                };
+                if cond.is_test {
+                    // test eax,eax -> call() == 0 / != 0
+                    format!("{} {} 0", call_str, op_str)
+                } else {
+                    // cmp eax,X -> call() == X / != X
+                    let right_str = match &cond.right {
+                        crate::condition::ConditionOperand::Constant(v) => format!("0x{:X}", v),
+                        crate::condition::ConditionOperand::Register { name, version } => {
+                            format!("{}.v{}", name, version)
+                        }
+                        other => format!("{}", other),
+                    };
+                    format!("{} {} {}", call_str, op_str, right_str)
+                }
+            }
+            _ => Self::fmt_condition(c),
         }
     }
 }
