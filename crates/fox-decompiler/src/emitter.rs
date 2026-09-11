@@ -238,7 +238,7 @@ impl CLikeEmitter {
                     evidence_tags.push("struct-member");
                 }
 
-                // P0-9.4: SSA Usage Pattern Mining
+                // P0-9.5: SSA Operation Behavior Mining
                 let behavioral_candidate = if in_cluster && **count >= 5 {
                     "struct-field"
                 } else if **count >= 20 {
