@@ -188,9 +188,17 @@ impl<'a> DynamicPluginResolver<'a> {
     }
 
     /// Resolve heap base identity from a Memory description like "[ecx+0xdbcb04]".
-    /// Returns (base_identity, offset). If base register is a GlobalBasePointer,
-    /// we can prove same-object identity; otherwise Unknown (fail-closed).
-    fn resolve_heap_base(&self, description: &str) -> (HeapBaseIdentity, Option<i64>) {
+    /// Returns (base_identity, offset).
+    /// P0-7.1B-R1.1: Uses exact SSA version of the base register at this instruction,
+    /// NOT a scan of all historical versions. If the exact current version is not
+    /// a GlobalBasePointer, returns Unknown (fail-closed).
+    fn resolve_heap_base(
+        &self,
+        ssa: &SSAFunction,
+        block_id: usize,
+        inst_idx: usize,
+        description: &str,
+    ) -> (HeapBaseIdentity, Option<i64>) {
         let offset = Self::extract_heap_offset(description);
         // Extract base register name from "[ecx+0x...]" or "[eax]"
         let base_name: Option<String> = if description.starts_with('[') {
@@ -209,19 +217,18 @@ impl<'a> DynamicPluginResolver<'a> {
         };
         let base_identity = match base_name {
             Some(reg) => {
-                // Find latest version of this register holding a GlobalBasePointer
-                // We search reg_values for any version of this register that is GlobalBasePointer
-                let mut found: Option<u64> = None;
-                for ((name, _ver), val) in &self.reg_values {
-                    if name == &reg {
-                        if let TrackedValue::GlobalBasePointer(addr) = val {
-                            found = Some(*addr);
-                            break;
+                // P0-7.1B-R1.1: Find the EXACT SSA version of this register
+                // at the current instruction, not any historical version.
+                match self.find_latest_register_version(ssa, block_id, inst_idx, &reg) {
+                    Some(ver) => {
+                        // Look up ONLY this exact (name, version) in reg_values.
+                        match self.reg_values.get(&(reg, ver)) {
+                            Some(TrackedValue::GlobalBasePointer(addr)) => {
+                                HeapBaseIdentity::Global(*addr)
+                            }
+                            _ => HeapBaseIdentity::Unknown,
                         }
                     }
-                }
-                match found {
-                    Some(addr) => HeapBaseIdentity::Global(addr),
                     None => HeapBaseIdentity::Unknown,
                 }
             }
@@ -578,7 +585,8 @@ impl<'a> DynamicPluginResolver<'a> {
                 // mov reg, [ecx+offset] where (base_identity, offset) was previously
                 // stored with a FunctionPointer. Fail-closed if base unknown.
                 if let MemoryVariable::Heap = &mem_var {
-                    let (base_identity, offset_opt) = self.resolve_heap_base(description);
+                    let (base_identity, offset_opt) =
+                        self.resolve_heap_base(ssa, block_id, inst_idx, description);
                     if let (HeapBaseIdentity::Global(global_addr), Some(offset)) =
                         (&base_identity, offset_opt)
                     {
@@ -679,11 +687,11 @@ impl<'a> DynamicPluginResolver<'a> {
                             self.memory_values.insert(mem_var, val);
                         }
                         MemoryVariable::Heap => {
-                            // P0-7.1B-R1: Track heap slots by (base_identity, offset).
-                            // Must prove same structural object, not just same offset.
+                            // P0-7.1B-R1.1: Track heap slots by (base_identity, offset).
+                            // Must prove same structural object using exact SSA version.
                             if let SSAOperand::Memory { description } = dst {
                                 let (base_identity, offset_opt) =
-                                    self.resolve_heap_base(description);
+                                    self.resolve_heap_base(ssa, block_id, inst_idx, description);
                                 if let Some(offset) = offset_opt {
                                     self.heap_offset_values.insert((base_identity, offset), val);
                                 }
@@ -964,4 +972,200 @@ pub fn resolutions_to_call_targets(
         map.insert(r.call_address, CallTarget::Symbol(target_name));
     }
     map
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fox_analysis::ssa::{SSABasicBlock, SSAFunction, SSAInstruction, SSAOperand};
+
+    fn make_test_ssa() -> SSAFunction {
+        // Block 0:
+        //   inst 0: mov ecx, [0x46E920]  → ecx.1 (would be GlobalBasePointer)
+        //   inst 1: mov ecx, eax          → ecx.2 (overwrites ecx.1)
+        //   inst 2: mov eax, [ecx+0x100]  → heap load using ecx.2 (NOT GlobalBasePointer)
+        SSAFunction {
+            name: "test".to_string(),
+            address: 0x400000,
+            basic_blocks: vec![SSABasicBlock {
+                id: 0,
+                start_address: 0x400000,
+                end_address: 0x400020,
+                instructions: vec![
+                    SSAInstruction {
+                        address: 0x400000,
+                        op: "Mov".to_string(),
+                        operands: vec![
+                            SSAOperand::Variable {
+                                name: "ecx".to_string(),
+                                version: 1,
+                            },
+                            SSAOperand::Memory {
+                                description: "[0x46e920]".to_string(),
+                            },
+                        ],
+                        original_mnemonic: "mov".to_string(),
+                        destination_operand_idx: Some(0),
+                    },
+                    SSAInstruction {
+                        address: 0x400005,
+                        op: "Mov".to_string(),
+                        operands: vec![
+                            SSAOperand::Variable {
+                                name: "ecx".to_string(),
+                                version: 2,
+                            },
+                            SSAOperand::Variable {
+                                name: "eax".to_string(),
+                                version: 0,
+                            },
+                        ],
+                        original_mnemonic: "mov".to_string(),
+                        destination_operand_idx: Some(0),
+                    },
+                    SSAInstruction {
+                        address: 0x40000A,
+                        op: "Mov".to_string(),
+                        operands: vec![
+                            SSAOperand::Variable {
+                                name: "eax".to_string(),
+                                version: 1,
+                            },
+                            SSAOperand::Memory {
+                                description: "[ecx+0x100]".to_string(),
+                            },
+                        ],
+                        original_mnemonic: "mov".to_string(),
+                        destination_operand_idx: Some(0),
+                    },
+                ],
+                phi_nodes: vec![],
+                successors: vec![],
+                predecessors: vec![],
+            }],
+            entry_block: 0,
+            phi_nodes: vec![],
+            variable_versions: HashMap::new(),
+            evidence: vec![],
+            use_def_chains: HashMap::new(),
+            def_use_chains: HashMap::new(),
+            proper_renaming: false,
+        }
+    }
+
+    fn make_resolver<'a>(
+        external_call_names: &'a HashMap<u64, String>,
+        iat_map: &'a HashMap<u64, String>,
+        string_table: &'a HashMap<u64, String>,
+        expr_engine: &'a ExpressionRecovery,
+        global_fp_slots: &'a HashMap<u64, TrackedValue>,
+        global_heap_slots: &'a HashMap<(u64, i64), TrackedValue>,
+    ) -> DynamicPluginResolver<'a> {
+        DynamicPluginResolver::new(
+            external_call_names,
+            iat_map,
+            string_table,
+            expr_engine,
+            None,
+            global_fp_slots,
+            global_heap_slots,
+        )
+    }
+
+    /// P0-7.1B-R1.1: Old version GlobalBasePointer must NOT be used after
+    /// the register is overwritten. Exact SSA version matching required.
+    #[test]
+    fn heap_base_overwritten_register_must_be_unknown() {
+        let ssa = make_test_ssa();
+        let external_call_names: HashMap<u64, String> = HashMap::new();
+        let iat_map: HashMap<u64, String> = HashMap::new();
+        let string_table: HashMap<u64, String> = HashMap::new();
+        let expr_engine = ExpressionRecovery::new();
+        let global_fp_slots: HashMap<u64, TrackedValue> = HashMap::new();
+        let global_heap_slots: HashMap<(u64, i64), TrackedValue> = HashMap::new();
+        let mut resolver = make_resolver(
+            &external_call_names,
+            &iat_map,
+            &string_table,
+            &expr_engine,
+            &global_fp_slots,
+            &global_heap_slots,
+        );
+        // ecx.1 is a GlobalBasePointer (from inst 0)
+        resolver.reg_values.insert(
+            ("ecx".to_string(), 1),
+            TrackedValue::GlobalBasePointer(0x46E920),
+        );
+        // ecx.2 is something else (overwritten at inst 1)
+        resolver
+            .reg_values
+            .insert(("ecx".to_string(), 2), TrackedValue::Unknown);
+
+        // At inst 2, the latest ecx version is 2 (overwritten).
+        // resolve_heap_base must find ecx.2, NOT ecx.1.
+        let (base_identity, offset) = resolver.resolve_heap_base(&ssa, 0, 2, "[ecx+0x100]");
+        assert_eq!(offset, Some(0x100));
+        assert!(
+            matches!(base_identity, HeapBaseIdentity::Unknown),
+            "Overwritten register must resolve to Unknown base identity, got {:?}",
+            base_identity
+        );
+    }
+
+    /// P0-7.1B-R1.1: When the current exact version IS a GlobalBasePointer,
+    /// it must resolve correctly.
+    #[test]
+    fn heap_base_exact_version_must_resolve() {
+        let ssa = make_test_ssa();
+        let external_call_names: HashMap<u64, String> = HashMap::new();
+        let iat_map: HashMap<u64, String> = HashMap::new();
+        let string_table: HashMap<u64, String> = HashMap::new();
+        let expr_engine = ExpressionRecovery::new();
+        let global_fp_slots: HashMap<u64, TrackedValue> = HashMap::new();
+        let global_heap_slots: HashMap<(u64, i64), TrackedValue> = HashMap::new();
+        let mut resolver = make_resolver(
+            &external_call_names,
+            &iat_map,
+            &string_table,
+            &expr_engine,
+            &global_fp_slots,
+            &global_heap_slots,
+        );
+        resolver.reg_values.insert(
+            ("ecx".to_string(), 1),
+            TrackedValue::GlobalBasePointer(0x46E920),
+        );
+
+        // At inst 1 (before ecx is overwritten), latest ecx version is 1.
+        let (base_identity, offset) = resolver.resolve_heap_base(&ssa, 0, 1, "[ecx+0x100]");
+        assert_eq!(offset, Some(0x100));
+        assert!(
+            matches!(base_identity, HeapBaseIdentity::Global(0x46E920)),
+            "Exact GlobalBasePointer version must resolve, got {:?}",
+            base_identity
+        );
+    }
+
+    /// P0-7.1B-R1.1: No GlobalBasePointer at all → Unknown.
+    #[test]
+    fn heap_base_no_global_pointer_must_be_unknown() {
+        let ssa = make_test_ssa();
+        let external_call_names: HashMap<u64, String> = HashMap::new();
+        let iat_map: HashMap<u64, String> = HashMap::new();
+        let string_table: HashMap<u64, String> = HashMap::new();
+        let expr_engine = ExpressionRecovery::new();
+        let global_fp_slots: HashMap<u64, TrackedValue> = HashMap::new();
+        let global_heap_slots: HashMap<(u64, i64), TrackedValue> = HashMap::new();
+        let resolver = make_resolver(
+            &external_call_names,
+            &iat_map,
+            &string_table,
+            &expr_engine,
+            &global_fp_slots,
+            &global_heap_slots,
+        );
+        // reg_values is empty — no GlobalBasePointer for ecx
+        let (base_identity, _) = resolver.resolve_heap_base(&ssa, 0, 2, "[ecx+0x100]");
+        assert!(matches!(base_identity, HeapBaseIdentity::Unknown));
+    }
 }
