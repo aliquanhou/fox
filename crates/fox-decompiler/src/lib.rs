@@ -22,7 +22,7 @@ pub use control_structure::{
 };
 pub use dynamic_plugin::{
     build_external_call_name_map, build_iat_map_from_imports, resolutions_to_call_targets,
-    DynamicCallEvidence, DynamicPluginResolver, ResolvedDynamicCall, ResolverStats,
+    DynamicCallEvidence, DynamicPluginResolver, ResolvedDynamicCall, ResolverStats, TrackedValue,
 };
 pub use emitter::{emit_c_like, emit_c_like_clean, CLikeEmitter, EmitterConfig};
 pub use expression::{BinaryOp, CallTarget, Expression, ExpressionRecovery, PhiIncoming, UnaryOp};

@@ -96,10 +96,17 @@ fn p0_7_1_dynamic_plugin_resolution() {
 
     // Gate 3-5: Run DynamicPluginResolver on each function
     let expr_engine = ExpressionRecovery::new();
-    let mut all_resolutions = Vec::new();
-    let mut total_stats = fox_decompiler::dynamic_plugin::ResolverStats::default();
 
-    for (func_idx, func_cfg) in result.cfg.function_cfgs.iter().enumerate() {
+    // P0-7.1B: Two-pass approach
+    // Pass 1: collect global function pointer slots (Store from GetProcAddress)
+    let empty_slots: HashMap<u64, fox_decompiler::dynamic_plugin::TrackedValue> = HashMap::new();
+    let empty_heap: HashMap<i64, fox_decompiler::dynamic_plugin::TrackedValue> = HashMap::new();
+    let mut global_fp_slots: HashMap<u64, fox_decompiler::dynamic_plugin::TrackedValue> =
+        HashMap::new();
+    let mut global_heap_slots: HashMap<i64, fox_decompiler::dynamic_plugin::TrackedValue> =
+        HashMap::new();
+
+    for func_cfg in &result.cfg.function_cfgs {
         let addr = func_cfg.function_address.0;
         let ctx = match result.pipeline.function_analysis.get(&addr) {
             Some(c) => c,
@@ -109,8 +116,56 @@ fn p0_7_1_dynamic_plugin_resolution() {
             Some(s) => s,
             None => continue,
         };
-        let mut resolver =
-            DynamicPluginResolver::new(&external_call_names, &iat_map, &string_table, &expr_engine);
+        let mut resolver = DynamicPluginResolver::new(
+            &external_call_names,
+            &iat_map,
+            &string_table,
+            &expr_engine,
+            ctx.memory_ssa.as_ref(),
+            &empty_slots,
+            &empty_heap,
+        );
+        let _ = resolver.resolve(ssa);
+        // Collect global slots stored by this function
+        for (addr, val) in resolver.collected_global_slots() {
+            global_fp_slots.insert(addr, val);
+        }
+        for (offset, val) in resolver.collected_heap_slots() {
+            global_heap_slots.insert(offset, val);
+        }
+    }
+    println!(
+        "\n=== P0-7.1B Pass 1: Global FP Slots: {}, Heap Slots: {} ===",
+        global_fp_slots.len(),
+        global_heap_slots.len()
+    );
+    for (offset, val) in &global_heap_slots {
+        println!("  heap[+0x{:x}] → {:?}", offset, val);
+    }
+
+    // Pass 2: resolve indirect calls using global slots
+    let mut all_resolutions = Vec::new();
+    let mut total_stats = fox_decompiler::dynamic_plugin::ResolverStats::default();
+
+    for func_cfg in &result.cfg.function_cfgs {
+        let addr = func_cfg.function_address.0;
+        let ctx = match result.pipeline.function_analysis.get(&addr) {
+            Some(c) => c,
+            None => continue,
+        };
+        let ssa = match ctx.ssa.as_ref() {
+            Some(s) => s,
+            None => continue,
+        };
+        let mut resolver = DynamicPluginResolver::new(
+            &external_call_names,
+            &iat_map,
+            &string_table,
+            &expr_engine,
+            ctx.memory_ssa.as_ref(),
+            &global_fp_slots,
+            &global_heap_slots,
+        );
         let resolutions = resolver.resolve(ssa);
         total_stats.load_library_calls += resolver.stats.load_library_calls;
         total_stats.load_library_resolved += resolver.stats.load_library_resolved;

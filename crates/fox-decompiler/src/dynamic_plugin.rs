@@ -13,6 +13,7 @@
 
 use std::collections::HashMap;
 
+use fox_analysis::memory_ssa::{MemorySSAFunction, MemoryVariable};
 use fox_analysis::ssa::{SSAFunction, SSAInstruction, SSAOperand};
 
 use crate::expression::{CallTarget, Expression, ExpressionRecovery};
@@ -45,7 +46,7 @@ pub struct DynamicCallEvidence {
 
 /// Internal tracked value during SSA scan.
 #[derive(Debug, Clone)]
-enum TrackedValue {
+pub enum TrackedValue {
     /// HMODULE from LoadLibraryA.
     ModuleHandle(String),
     /// Function pointer from GetProcAddress.
@@ -73,6 +74,18 @@ pub struct DynamicPluginResolver<'a> {
     resolutions: Vec<ResolvedDynamicCall>,
     /// Register (name, version) → tracked value within current block.
     reg_values: HashMap<(String, u32), TrackedValue>,
+    /// Memory SSA for Store→Load function pointer propagation (P0-7.1B).
+    memory_ssa: Option<&'a MemorySSAFunction>,
+    /// MemoryVariable → tracked value (only Global addresses, exact identity).
+    memory_values: HashMap<MemoryVariable, TrackedValue>,
+    /// Heap offset → tracked value (for [reg+offset] function pointer slots).
+    /// Key is the numeric displacement from the Memory description.
+    heap_offset_values: HashMap<i64, TrackedValue>,
+    /// External global function pointer slots (cross-function, from first pass).
+    /// Map: global address → tracked value (FunctionPointer/ModuleHandle).
+    global_fp_slots: &'a HashMap<u64, TrackedValue>,
+    /// External heap-offset function pointer slots (cross-function, from first pass).
+    global_heap_slots: &'a HashMap<i64, TrackedValue>,
     /// Statistics.
     pub stats: ResolverStats,
 }
@@ -96,6 +109,9 @@ impl<'a> DynamicPluginResolver<'a> {
         iat_map: &'a HashMap<u64, String>,
         string_table: &'a HashMap<u64, String>,
         expr_engine: &'a ExpressionRecovery,
+        memory_ssa: Option<&'a MemorySSAFunction>,
+        global_fp_slots: &'a HashMap<u64, TrackedValue>,
+        global_heap_slots: &'a HashMap<i64, TrackedValue>,
     ) -> Self {
         Self {
             external_call_names,
@@ -104,7 +120,57 @@ impl<'a> DynamicPluginResolver<'a> {
             expr_engine,
             resolutions: Vec::new(),
             reg_values: HashMap::new(),
+            memory_ssa,
+            memory_values: HashMap::new(),
+            heap_offset_values: HashMap::new(),
+            global_fp_slots,
+            global_heap_slots,
             stats: ResolverStats::default(),
+        }
+    }
+
+    /// Collect global function pointer slots stored in this function.
+    /// Used in first pass to build cross-function global slot map.
+    /// Returns (global_address → value) and (heap_offset → value).
+    pub fn collected_global_slots(&self) -> HashMap<u64, TrackedValue> {
+        let mut out = HashMap::new();
+        for (var, val) in &self.memory_values {
+            if let MemoryVariable::Global { address } = var {
+                out.insert(*address, val.clone());
+            }
+        }
+        out
+    }
+
+    /// Collect heap-offset function pointer slots (cross-function).
+    pub fn collected_heap_slots(&self) -> HashMap<i64, TrackedValue> {
+        self.heap_offset_values.clone()
+    }
+
+    /// Extract numeric displacement from a Memory description like "[ecx+0xdbcb04]".
+    /// Returns None if no displacement found (e.g. "[ecx]" or "[0x46A180]").
+    fn extract_heap_offset(description: &str) -> Option<i64> {
+        // Look for +0xHEX or -0xHEX pattern after a register name
+        let sign_pos = description.find('+').or_else(|| description.find('-'))?;
+        let after_sign = &description[sign_pos + 1..];
+        // Skip optional "0x" prefix
+        let hex_start = if after_sign.starts_with("0x") || after_sign.starts_with("0X") {
+            2
+        } else {
+            0
+        };
+        let num_str: String = after_sign[hex_start..]
+            .chars()
+            .take_while(|c| c.is_ascii_hexdigit())
+            .collect();
+        if num_str.is_empty() {
+            return None;
+        }
+        let val = i64::from_str_radix(&num_str, 16).ok()?;
+        if description.as_bytes()[sign_pos] == b'-' {
+            Some(-val)
+        } else {
+            Some(val)
         }
     }
 
@@ -122,6 +188,8 @@ impl<'a> DynamicPluginResolver<'a> {
                         | TrackedValue::ExternalFunction(_)
                 )
             });
+            // Preserve memory_values across blocks (Global function pointer slots).
+            // Only Global addresses are tracked (exact identity, no alias risk).
             for (idx, inst) in block.instructions.iter().enumerate() {
                 self.process_instruction(ssa, block.id, idx, inst);
             }
@@ -138,7 +206,7 @@ impl<'a> DynamicPluginResolver<'a> {
     ) {
         match inst.op.as_str() {
             "Call" => self.process_call(ssa, block_id, inst_idx, inst),
-            "Mov" => self.process_mov(inst),
+            "Mov" => self.process_mov(ssa, block_id, inst_idx, inst),
             _ => {}
         }
     }
@@ -313,11 +381,25 @@ impl<'a> DynamicPluginResolver<'a> {
         }
     }
 
-    fn process_mov(&mut self, inst: &SSAInstruction) {
-        if inst.operands.len() < 2 {
+    fn process_mov(
+        &mut self,
+        ssa: &SSAFunction,
+        block_id: usize,
+        inst_idx: usize,
+        inst: &SSAInstruction,
+    ) {
+        // Note: Store instructions may have only 1 operand (Memory dst) in SSA,
+        // because the source register is dropped. We recover it via Memory SSA.
+        if inst.operands.is_empty() {
             return;
         }
         let dst = &inst.operands[0];
+
+        // Single-operand Store (e.g. mov [0x46A180], eax): only handle Store logic.
+        if inst.operands.len() == 1 {
+            self.process_store(ssa, block_id, inst_idx, inst, dst, None);
+            return;
+        }
         let src = &inst.operands[1];
 
         // mov reg, constant → track ConstantAddress (string pointer)
@@ -345,6 +427,7 @@ impl<'a> DynamicPluginResolver<'a> {
             SSAOperand::Memory { description },
         ) = (dst, src)
         {
+            // First: check IAT map (external function thunk)
             if let Some(hex_start) = description.find("0x") {
                 let addr_str: String = description[hex_start + 2..]
                     .chars()
@@ -357,6 +440,44 @@ impl<'a> DynamicPluginResolver<'a> {
                             TrackedValue::ExternalFunction(func_name.clone()),
                         );
                         return;
+                    }
+                }
+            }
+            // P0-7.1B: Load from memory that holds a function pointer
+            // mov reg, [global_addr] where global_addr was previously stored
+            // with a FunctionPointer from GetProcAddress.
+            if let Some(mem_var) = self.lookup_memory_use(block_id, inst_idx) {
+                // First check function-local memory_values
+                if let Some(val) = self.memory_values.get(&mem_var).cloned() {
+                    self.stats.propagation_mov += 1;
+                    self.reg_values.insert((dst_name.clone(), *dst_ver), val);
+                    return;
+                }
+                // Then check cross-function global slots
+                if let MemoryVariable::Global { address } = &mem_var {
+                    if let Some(val) = self.global_fp_slots.get(address).cloned() {
+                        self.stats.propagation_mov += 1;
+                        self.reg_values.insert((dst_name.clone(), *dst_ver), val);
+                        return;
+                    }
+                }
+                // P0-7.1B: Load from heap slot that holds a function pointer
+                // mov reg, [ecx+offset] where offset was previously stored
+                // with a FunctionPointer from GetProcAddress.
+                if let MemoryVariable::Heap = &mem_var {
+                    if let Some(offset) = Self::extract_heap_offset(description) {
+                        // First check function-local
+                        if let Some(val) = self.heap_offset_values.get(&offset).cloned() {
+                            self.stats.propagation_mov += 1;
+                            self.reg_values.insert((dst_name.clone(), *dst_ver), val);
+                            return;
+                        }
+                        // Then check cross-function heap slots
+                        if let Some(val) = self.global_heap_slots.get(&offset).cloned() {
+                            self.stats.propagation_mov += 1;
+                            self.reg_values.insert((dst_name.clone(), *dst_ver), val);
+                            return;
+                        }
                     }
                 }
             }
@@ -379,6 +500,139 @@ impl<'a> DynamicPluginResolver<'a> {
                 self.reg_values.insert((dst_name.clone(), *dst_ver), val);
             }
         }
+
+        // P0-7.1B: Store a tracked function pointer to memory (two-operand form)
+        if let SSAOperand::Memory { .. } = dst {
+            self.process_store(ssa, block_id, inst_idx, inst, dst, Some(src));
+        }
+    }
+
+    /// Handle Store instruction: track function pointers / module handles written to memory.
+    ///
+    /// Two cases:
+    /// 1. SSA has both operands: dst=Memory, src=Variable (e.g. mov [ecx+off], eax)
+    /// 2. SSA has only Memory operand (e.g. mov [0x46A180], eax) — source register
+    ///    is dropped by SSA construction, recover it from MemoryDef.source_register
+    fn process_store(
+        &mut self,
+        ssa: &SSAFunction,
+        block_id: usize,
+        inst_idx: usize,
+        _inst: &SSAInstruction,
+        dst: &SSAOperand,
+        src: Option<&SSAOperand>,
+    ) {
+        let store_src_reg: Option<(String, u32)> = match (dst, src) {
+            (SSAOperand::Memory { .. }, Some(SSAOperand::Variable { name, version })) => {
+                Some((name.clone(), *version))
+            }
+            (SSAOperand::Memory { .. }, _) => {
+                // Single-operand store: recover source register.
+                // Two sub-cases:
+                // a) Memory SSA has source_register → use it
+                // b) Memory SSA source_register is None → this is x86 A3 encoding
+                //    `mov [disp32], eax`, where source is implicitly eax.
+                //    This is guaranteed by x86 instruction encoding (A3 is the
+                //    only opcode that produces a single-operand Store in SSA).
+                if let Some(mem_def) = self.lookup_memory_def_full(block_id, inst_idx) {
+                    let src_name = mem_def
+                        .source_register
+                        .clone()
+                        .unwrap_or_else(|| "eax".to_string());
+                    // Fall back to version 0 if no explicit definition found
+                    // (e.g. call return value not versioned by SSA).
+                    let version = self
+                        .find_latest_register_version(ssa, block_id, inst_idx, &src_name)
+                        .unwrap_or(0);
+                    Some((src_name, version))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+
+        if let Some((src_name, src_ver)) = store_src_reg {
+            if let Some(val) = self.reg_values.get(&(src_name, src_ver)).cloned() {
+                if let Some(mem_var) = self.lookup_memory_def(block_id, inst_idx) {
+                    match mem_var {
+                        MemoryVariable::Global { .. } => {
+                            self.memory_values.insert(mem_var, val);
+                        }
+                        MemoryVariable::Heap => {
+                            // Track heap slots by displacement (e.g. [ecx+0xDBCB04]).
+                            if let SSAOperand::Memory { description } = dst {
+                                if let Some(offset) = Self::extract_heap_offset(description) {
+                                    self.heap_offset_values.insert(offset, val);
+                                }
+                            }
+                        }
+                        _ => {} // Stack/Unknown: too aliasing-prone to track
+                    }
+                }
+            }
+        }
+    }
+
+    /// Look up the MemoryVariable for a Store instruction via Memory SSA.
+    fn lookup_memory_def(&self, block_id: usize, inst_idx: usize) -> Option<MemoryVariable> {
+        let mssa = self.memory_ssa?;
+        mssa.definitions
+            .iter()
+            .find(|d| d.block_id == block_id && d.inst_index == inst_idx)
+            .map(|d| d.variable.clone())
+    }
+
+    /// Look up the full MemoryDef for a Store instruction via Memory SSA.
+    fn lookup_memory_def_full(
+        &self,
+        block_id: usize,
+        inst_idx: usize,
+    ) -> Option<&fox_analysis::memory_ssa::MemoryDef> {
+        let mssa = self.memory_ssa?;
+        mssa.definitions
+            .iter()
+            .find(|d| d.block_id == block_id && d.inst_index == inst_idx)
+    }
+
+    /// Find the latest SSA version of a register before a given instruction in a block.
+    fn find_latest_register_version(
+        &self,
+        ssa: &SSAFunction,
+        block_id: usize,
+        inst_idx: usize,
+        reg_name: &str,
+    ) -> Option<u32> {
+        let block = ssa.basic_blocks.get(block_id)?;
+        let mut latest: Option<u32> = None;
+        for (i, inst) in block.instructions.iter().enumerate() {
+            if i >= inst_idx {
+                break;
+            }
+            if let Some(dst_idx) = inst.destination_operand_idx {
+                if let Some(SSAOperand::Variable { name, version }) = inst.operands.get(dst_idx) {
+                    if name == reg_name {
+                        latest = Some(*version);
+                    }
+                }
+            }
+        }
+        // Also check phi nodes at block entry (function-level phi list)
+        for phi in &ssa.phi_nodes {
+            if phi.block_id == block_id && phi.variable == reg_name {
+                latest = Some(latest.map_or(phi.result_version, |v| v.max(phi.result_version)));
+            }
+        }
+        latest
+    }
+
+    /// Look up the MemoryVariable for a Load instruction via Memory SSA.
+    fn lookup_memory_use(&self, block_id: usize, inst_idx: usize) -> Option<MemoryVariable> {
+        let mssa = self.memory_ssa?;
+        mssa.uses
+            .iter()
+            .find(|u| u.block_id == block_id && u.inst_index == inst_idx)
+            .map(|u| u.variable.clone())
     }
 
     /// Recover a string argument from the Nth PUSH before a call (0 = nearest PUSH).
