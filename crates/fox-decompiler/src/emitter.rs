@@ -84,9 +84,10 @@ pub struct CLikeEmitter {
     /// P0-8.3: Maps bare register names (e.g. "ecx") to global names, but ONLY when
     /// the latest SSA version of that register holds the global. If the register is
     /// reassigned to a non-global value, this entry is removed.
-    /// This allows safe propagation through Unknown memory operands that only
-    /// carry the bare register name without SSA version.
     reg_name_to_global: RefCell<HashMap<String, String>>,
+    /// P0-8.4: Collects field offsets accessed on each global object, per function.
+    /// Used to emit structure candidate comments at the end of each function.
+    field_accesses: RefCell<HashMap<String, Vec<u64>>>,
 }
 
 impl Default for CLikeEmitter {
@@ -101,6 +102,7 @@ impl CLikeEmitter {
             config: EmitterConfig::default(),
             reg_to_global: RefCell::new(HashMap::new()),
             reg_name_to_global: RefCell::new(HashMap::new()),
+            field_accesses: RefCell::new(HashMap::new()),
         }
     }
 
@@ -109,6 +111,7 @@ impl CLikeEmitter {
             config,
             reg_to_global: RefCell::new(HashMap::new()),
             reg_name_to_global: RefCell::new(HashMap::new()),
+            field_accesses: RefCell::new(HashMap::new()),
         }
     }
 
@@ -123,6 +126,8 @@ impl CLikeEmitter {
         // P0-8.3: Reset register-to-global mapping per function
         self.reg_to_global.borrow_mut().clear();
         self.reg_name_to_global.borrow_mut().clear();
+        // P0-8.4: Reset field access collection per function
+        self.field_accesses.borrow_mut().clear();
 
         if self.config.show_header {
             let name = func.name.as_deref().unwrap_or("unknown");
@@ -147,7 +152,73 @@ impl CLikeEmitter {
             self.emit_statement(stmt, 1, out);
         }
 
+        // P0-8.4: Emit structure candidate comment for global objects accessed in this function
+        self.emit_structure_candidates(out);
+
         out.push_str("}\n");
+    }
+
+    /// P0-8.4: Emit structure field clustering as a comment block.
+    fn emit_structure_candidates(&self, out: &mut String) {
+        let accesses = self.field_accesses.borrow();
+        if accesses.is_empty() {
+            return;
+        }
+
+        out.push_str("    /* P0-8.4 Structure Candidates:\n");
+        for (obj, offsets) in accesses.iter() {
+            // Deduplicate and sort offsets
+            let mut sorted: Vec<u64> = offsets.clone();
+            sorted.sort_unstable();
+            sorted.dedup();
+
+            // Cluster consecutive offsets (step 4 bytes = DWORD)
+            let mut clusters: Vec<Vec<u64>> = Vec::new();
+            let mut current: Vec<u64> = Vec::new();
+            for &off in &sorted {
+                if current.is_empty() {
+                    current.push(off);
+                } else {
+                    let last = *current.last().unwrap();
+                    if off - last == 4 {
+                        current.push(off);
+                    } else {
+                        if current.len() >= 2 {
+                            clusters.push(current);
+                        }
+                        current = vec![off];
+                    }
+                }
+            }
+            if current.len() >= 2 {
+                clusters.push(current);
+            }
+
+            out.push_str(&format!("     * Object: {}\n", obj));
+            out.push_str(&format!("     *   Fields ({} unique):", sorted.len()));
+            for (i, off) in sorted.iter().enumerate() {
+                if i % 8 == 0 {
+                    out.push_str("\n     *     ");
+                }
+                out.push_str(&format!(" +0x{:X}", off));
+            }
+            out.push_str("\n");
+            if !clusters.is_empty() {
+                out.push_str(&format!("     *   Clusters ({}):", clusters.len()));
+                for c in &clusters {
+                    let size = (c.last().unwrap() - c.first().unwrap()) + 4;
+                    out.push_str(&format!(
+                        " +0x{:X}..+0x{:X} ({} bytes, {} fields)",
+                        c.first().unwrap(),
+                        c.last().unwrap(),
+                        size,
+                        c.len()
+                    ));
+                }
+                out.push_str("\n");
+            }
+        }
+        out.push_str("     */\n");
     }
 
     fn emit_statement(&self, stmt: &Statement, depth: usize, out: &mut String) {
@@ -438,6 +509,14 @@ impl CLikeEmitter {
                 // P0-8.3: Check if this register version points to a global object
                 let key = format!("{}_{}", base_name, base_version);
                 if let Some(global) = self.reg_to_global.borrow().get(&key) {
+                    // P0-8.4: Record field access on global object
+                    if !negative && offset > 0 && offset < 0x1000000 {
+                        self.field_accesses
+                            .borrow_mut()
+                            .entry(global.clone())
+                            .or_default()
+                            .push(offset);
+                    }
                     return Some(format!("{}->field_{}", global, off_str));
                 }
                 Some(format!("{}->field_{}", base_name, off_str))
@@ -491,6 +570,14 @@ impl CLikeEmitter {
                 if let Ok(off) = u64::from_str_radix(off_str.trim_start_matches("0x"), 16) {
                     // P0-8.3: Check if this register name currently points to a global object
                     if let Some(global) = self.reg_name_to_global.borrow().get(reg) {
+                        // P0-8.4: Record field access on global object
+                        if off > 0 && off < 0x1000000 {
+                            self.field_accesses
+                                .borrow_mut()
+                                .entry(global.clone())
+                                .or_default()
+                                .push(off);
+                        }
                         return Some(format!("{}->field_0x{:X}", global, off));
                     }
                     return Some(format!("{}->field_0x{:X}", reg, off));
