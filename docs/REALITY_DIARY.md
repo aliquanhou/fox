@@ -90,3 +90,11 @@ KeyTable 0→43，DLL 独立工作。
 - All MSVC cl /c 0 errors
 - Remaining: NTCDLLG, M3, M4 hang on SSA convergence
 
+
+## FOX v1.0 BASELINE (2026-09-13)
+- Commit: 5542998
+- 14/14 PEs decompiled, ~4111 functions, ~4036 recovered, ~16MB C
+- All MSVC cl /c 0 errors
+- Round-trip: rm8 output matches baseline
+- This is the Binary Recovery Baseline. No future change may break this.
+
