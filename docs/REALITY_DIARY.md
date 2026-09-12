@@ -64,3 +64,8 @@ KeyTable 0→43，DLL 独立工作。
 - New CExpr::Compare; unresolved branches still degrade to Unknown (compile-safe).
 - Sample: if ((tll_edi_1 <= tll_esi_1)) { ... } else { ... }. MSVC cl /c PASS.
 
+
+## RM-7.4: Variable Naming (2026-09-12)
+- tll_<reg>_<version> -> sequential tmp_N (source-style, no register leak).
+- Same SSA value keeps same tmp across function. MSVC cl /c PASS.
+
