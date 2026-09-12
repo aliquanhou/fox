@@ -54,6 +54,9 @@ fn batch_decompile_all_ntcmach_functions() {
     let path = ntcmach_path();
     let data = std::fs::read(&path).expect("read NtcMach");
     let binary = Binary::load(data).expect("parse NtcMach");
+    // GAP-RM-4: IAT entry -> import symbol.
+    let iat_map = fox_decompiler::iat_resolution::IatMap::from_binary(&binary);
+    println!("GAP-RM-4 IAT entries: {}", iat_map.len());
     let result = analyze_binary(&binary).expect("analyze NtcMach");
 
     let total_functions = result.cfg.function_cfgs.len();
@@ -142,7 +145,7 @@ fn batch_decompile_all_ntcmach_functions() {
                 addr
             );
         }
-        let built = build_single_function(&result, addr, &name, &call_targets);
+        let built = build_single_function(&result, addr, &name, &call_targets, &iat_map);
         built_entries.push(BuiltEntry { addr, name, built });
     }
 
@@ -470,6 +473,7 @@ fn build_single_function(
     addr: u64,
     name: &str,
     call_targets: &std::collections::HashMap<u64, fox_decompiler::CallTarget>,
+    iat_map: &fox_decompiler::iat_resolution::IatMap,
 ) -> Result<BuiltFunction, FunctionResult> {
     let func_cfg = match result
         .cfg
@@ -565,7 +569,8 @@ fn build_single_function(
     budget.max_statements = 2000; // conservative for batch
     let mut builder = StructuredIRBuilder::new()
         .with_budget(budget)
-        .with_call_targets(call_targets.clone());
+        .with_call_targets(call_targets.clone())
+        .with_iat_map(iat_map.clone());
     let func = builder.build(func_cfg, ssa, cs);
 
     // Count statement types

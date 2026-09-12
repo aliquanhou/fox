@@ -251,6 +251,8 @@ pub struct StructuredIRBuilder {
     budget: StructuredIRBudget,
     /// P0-6.10: Resolved call targets from CallGraph, keyed by call instruction address.
     call_targets: Option<std::collections::HashMap<u64, CallTarget>>,
+    /// GAP-RM-4: IAT entry -> import symbol, for `call [iat]`.
+    iat_map: Option<crate::iat_resolution::IatMap>,
 }
 
 impl Default for StructuredIRBuilder {
@@ -265,6 +267,7 @@ impl StructuredIRBuilder {
             expr_engine: ExpressionRecovery::new(),
             budget: StructuredIRBudget::new(),
             call_targets: None,
+            iat_map: None,
         }
     }
 
@@ -280,6 +283,12 @@ impl StructuredIRBuilder {
         targets: std::collections::HashMap<u64, CallTarget>,
     ) -> Self {
         self.call_targets = Some(targets);
+        self
+    }
+
+    /// GAP-RM-4: Provide the IAT address -> import symbol map.
+    pub fn with_iat_map(mut self, iat: crate::iat_resolution::IatMap) -> Self {
+        self.iat_map = Some(iat);
         self
     }
 
@@ -651,6 +660,21 @@ impl StructuredIRBuilder {
     }
 
     fn extract_call_target(&self, inst: &fox_analysis::ssa::SSAInstruction) -> CallTarget {
+        // GAP-RM-4: IAT import resolution first — `call [iat_entry]` is an
+        // unambiguous import even if the upper callgraph left it Unknown.
+        if let Some(iat) = &self.iat_map {
+            for op in &inst.operands {
+                if let fox_analysis::ssa::SSAOperand::Memory { description } = op {
+                    if let Some(p) = crate::memory_recovery::parse_memory_operand(description) {
+                        if p.base.is_none() {
+                            if let Some(name) = iat.lookup(p.offset as u64) {
+                                return CallTarget::Symbol(name.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // P0-6.10: First check CallGraph-resolved targets (most reliable).
         if let Some(ref targets) = self.call_targets {
             if let Some(t) = targets.get(&inst.address) {
@@ -668,6 +692,19 @@ impl StructuredIRBuilder {
                     return CallTarget::Symbol(s.clone());
                 }
                 fox_analysis::ssa::SSAOperand::Constant(v) => return CallTarget::Address(*v),
+                fox_analysis::ssa::SSAOperand::Memory { description } => {
+                    // GAP-RM-4: `call [iat_entry]` -> import symbol.
+                    if let (Some(iat), Some(p)) = (
+                        &self.iat_map,
+                        crate::memory_recovery::parse_memory_operand(description),
+                    ) {
+                        if p.base.is_none() {
+                            if let Some(name) = iat.lookup(p.offset as u64) {
+                                return CallTarget::Symbol(name.to_string());
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }
