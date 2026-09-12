@@ -216,9 +216,10 @@ fn batch_decompile_all_ntcmach_functions() {
     // P0-15: Build recovered object/field evidence across all functions.
     let obj_map = fox_decompiler::ObjectRecoveryBuilder::build(&all_funcs, &regions);
     println!(
-        "P0-15 Objects: objects={}, fields={}",
+        "P0-15 Objects: objects={}, fields={}, contiguous_structs={}",
         obj_map.object_count(),
-        obj_map.total_fields()
+        obj_map.total_fields(),
+        obj_map.contiguous_struct_count()
     );
     println!("");
 

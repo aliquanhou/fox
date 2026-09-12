@@ -101,6 +101,15 @@ pub struct FieldCandidate {
     pub touched_by: BTreeSet<u64>,
 }
 
+/// Layout shape of a recovered struct candidate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StructLayoutKind {
+    /// Fields tile contiguous slots (e.g. 0x0,0x4,0x8) — struct-like.
+    Contiguous,
+    /// Fields are scattered — sparse global, weak struct evidence.
+    Sparse,
+}
+
 /// One recovered object (global base + its fields).
 #[derive(Debug, Clone)]
 pub struct ObjectCandidate {
@@ -114,6 +123,10 @@ pub struct ObjectCandidate {
     pub fields: BTreeMap<u64, FieldCandidate>,
     /// Functions that touch this object at all.
     pub functions: BTreeSet<u64>,
+    /// GAP-RM-3: inferred struct size = max observed offset + slot width (4).
+    pub size_candidate: u64,
+    /// GAP-RM-3: contiguous vs sparse layout shape.
+    pub layout: StructLayoutKind,
 }
 
 /// The recovered object map, consumed read-only by the emitter.
@@ -150,6 +163,14 @@ impl ObjectMap {
 
     pub fn total_fields(&self) -> usize {
         self.objects.iter().map(|o| o.fields.len()).sum()
+    }
+
+    /// GAP-RM-3: count objects whose fields tile a contiguous struct layout.
+    pub fn contiguous_struct_count(&self) -> usize {
+        self.objects
+            .iter()
+            .filter(|o| o.layout == StructLayoutKind::Contiguous)
+            .count()
     }
 }
 
@@ -350,6 +371,21 @@ impl FuncScan {
     }
 }
 
+/// GAP-RM-3: decide whether fields tile a contiguous struct or are scattered.
+fn infer_layout(fields: &BTreeMap<u64, FieldCandidate>) -> StructLayoutKind {
+    let offsets: Vec<u64> = fields.keys().copied().collect();
+    if offsets.len() < 2 {
+        return StructLayoutKind::Sparse;
+    }
+    let contiguous_gaps = offsets.windows(2).filter(|w| w[1] - w[0] <= 8).count();
+    let total_gaps = offsets.len() - 1;
+    if contiguous_gaps * 3 >= total_gaps * 2 {
+        StructLayoutKind::Contiguous
+    } else {
+        StructLayoutKind::Sparse
+    }
+}
+
 /// Builds the ObjectMap from all decompiled functions.
 pub struct ObjectRecoveryBuilder;
 
@@ -392,6 +428,9 @@ impl ObjectRecoveryBuilder {
                     );
                 }
             }
+            // GAP-RM-3: infer struct size + layout shape from observed offsets.
+            let size_candidate = fields.last_key_value().map(|(off, _)| off + 4).unwrap_or(0);
+            let layout = infer_layout(&fields);
             by_base.insert(base, id);
             objects.push(ObjectCandidate {
                 id,
@@ -399,6 +438,8 @@ impl ObjectRecoveryBuilder {
                 name: format!("global_{:X}", base),
                 fields,
                 functions: scan.obj_funcs.get(&base).cloned().unwrap_or_default(),
+                size_candidate,
+                layout,
             });
         }
 
