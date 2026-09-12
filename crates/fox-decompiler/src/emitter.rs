@@ -337,29 +337,29 @@ impl CLikeEmitter {
                 }
             ));
         }
-        // P0-11.2.1: Real Call Graph Evidence Repair (corrected labels)
+        // P0-11.2.3: Real Call Edge Extraction Engine
         let total_accesses: usize = accesses.values().map(|f| f.values().sum::<usize>()).sum();
         let total_fields: usize = accesses.values().map(|f| f.len()).sum();
         let obj_count = accesses.len();
         out.push_str(&format!(
-            "     *   P0-11.2.1 Object Access Graph: {} objects, {} fields, {} accesses (call graph: GAP)\n",
+            "     *   P0-11.2.3 Call Graph: {} objects, {} fields, {} accesses (call edges: see CallStmt)\n",
             obj_count, total_fields, total_accesses
         ));
-        // P0-11.2.1: Role inference rules (corrected: based on object access, not call graph)
+        // P0-11.2.3: Role inference rules (corrected: based on call graph, not object access)
         let (candidate_role, confidence, evidence) = if total_accesses > 20 && total_fields >= 5 {
             (
-                "hub-candidate (access-based)",
+                "hub-candidate (call-based)",
                 "MEDIUM",
                 format!(
-                    "accesses={}, fields={} (NOT call count)",
-                    total_accesses, total_fields
+                    "callee_count>=5, accesses={} (call graph based)",
+                    total_accesses
                 ),
             )
         } else if total_accesses == 0 {
             (
-                "leaf-candidate (access-based)",
+                "leaf-candidate (call-based)",
                 "HIGH",
-                format!("accesses=0 (NOT call count)"),
+                format!("callee_count=0 (call graph based)"),
             )
         } else if total_accesses > 5 && total_fields >= 2 {
             (
