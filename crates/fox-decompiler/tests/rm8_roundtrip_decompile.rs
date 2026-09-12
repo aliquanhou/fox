@@ -157,7 +157,6 @@ fn rm8_roundtrip_decompile() {
             Ok(b) => Some(&b.func),
             Err(_) => None,
         })
-        .filter(|f| f.address == 0x140001010) // RM-8: only real user main
         .collect();
     let call_graph = fox_decompiler::DecompilerCallGraphBuilder::build(&all_funcs);
     // RM-8 debug: dump main statement kinds
