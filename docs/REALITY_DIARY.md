@@ -52,3 +52,9 @@ KeyTable 0→43，DLL 独立工作。
 - KeyTable: deref-literal-0 662 -> 0, MSVC cl /c still PASS.
 - No field-name/type guessing; raw address/register-offset preserved.
 
+
+## RM-7.2: Function Prototype (2026-09-12)
+- Forward decls and defs now carry variadic prototypes (uint32_t, ...) so call sites with differing arity compile.
+- Empty calls render as call(0); collect_callees tracks max args.
+- No SDK types / no guessed names; all uint32_t. MSVC cl /c PASS.
+

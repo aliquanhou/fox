@@ -271,20 +271,29 @@ impl CRenderer {
         out.push_str("static void tll_unknown_op(void) {}\n");
         out.push_str("static uint32_t tll_unknown_call() { return 0; }\n\n");
 
-        // Forward declarations for every called function.
+        // RM-7.2: collect every callee and its max call-site argument count.
         let mut callees = std::collections::BTreeSet::new();
+        let mut arg_counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
         for f in funcs {
             for s in &f.stmts {
-                Self::collect_callees(s, &mut callees);
+                Self::collect_callees(s, &mut callees, &mut arg_counts);
             }
         }
+        let sig = |name: &str| -> String {
+            // Variadic prototype tolerates the fact that different call sites
+            // disagree on arity (SSA argument binding not done yet).
+            format!("uint32_t {}(uint32_t, ...)", name)
+        };
         for c in &callees {
-            out.push_str(&format!("uint32_t {}();\n", c));
+            out.push_str(&format!("extern {};\n", sig(c)));
         }
         out.push('\n');
 
         for f in funcs {
-            out.push_str(&format!("static uint32_t {}() {{\n", f.name));            if !f.tmps.is_empty() {
+            out.push_str("static uint32_t ");
+            out.push_str(&f.name);
+            out.push_str("(uint32_t arg0, ...) {\n");
+            if !f.tmps.is_empty() {
                 out.push_str("    uint32_t ");
                 out.push_str(&f.tmps.join(", "));
                 out.push_str(";\n");
@@ -300,37 +309,49 @@ impl CRenderer {
         out
     }
 
-    fn collect_callees(stmt: &CStmt, out: &mut std::collections::BTreeSet<String>) {
+    fn collect_callees(
+        stmt: &CStmt,
+        out: &mut std::collections::BTreeSet<String>,
+        arg_counts: &mut std::collections::BTreeMap<String, usize>,
+    ) {
         match stmt {
-            CStmt::Expr(e) => Self::collect_callees_expr(e, out),
+            CStmt::Expr(e) => Self::collect_callees_expr(e, out, arg_counts),
             CStmt::Assign { lhs, rhs } => {
-                Self::collect_callees_expr(lhs, out);
-                Self::collect_callees_expr(rhs, out);
+                Self::collect_callees_expr(lhs, out, arg_counts);
+                Self::collect_callees_expr(rhs, out, arg_counts);
             }
             CStmt::If { then, els, .. } => {
                 for s in then.iter().chain(els) {
-                    Self::collect_callees(s, out);
+                    Self::collect_callees(s, out, arg_counts);
                 }
             }
-            CStmt::Return(Some(v)) => Self::collect_callees_expr(v, out),
+            CStmt::Return(Some(v)) => Self::collect_callees_expr(v, out, arg_counts),
             _ => {}
         }
     }
 
-    fn collect_callees_expr(e: &CExpr, out: &mut std::collections::BTreeSet<String>) {
+    fn collect_callees_expr(
+        e: &CExpr,
+        out: &mut std::collections::BTreeSet<String>,
+        arg_counts: &mut std::collections::BTreeMap<String, usize>,
+    ) {
         match e {
             CExpr::Call { target, args } => {
                 out.insert(target.clone());
+                let entry = arg_counts.entry(target.clone()).or_insert(0);
+                if args.len() > *entry {
+                    *entry = args.len();
+                }
                 for a in args {
-                    Self::collect_callees_expr(a, out);
+                    Self::collect_callees_expr(a, out, arg_counts);
                 }
             }
             CExpr::Binary { left, right, .. } => {
-                Self::collect_callees_expr(left, out);
-                Self::collect_callees_expr(right, out);
+                Self::collect_callees_expr(left, out, arg_counts);
+                Self::collect_callees_expr(right, out, arg_counts);
             }
-            CExpr::Unary { operand, .. } => Self::collect_callees_expr(operand, out),
-            CExpr::Deref(inner) => Self::collect_callees_expr(inner, out),
+            CExpr::Unary { operand, .. } => Self::collect_callees_expr(operand, out, arg_counts),
+            CExpr::Deref(inner) => Self::collect_callees_expr(inner, out, arg_counts),
             _ => {}
         }
     }
@@ -360,6 +381,9 @@ impl CRenderer {
             CExpr::Call { target, args } => {
                 out.push_str(target);
                 out.push('(');
+                if args.is_empty() {
+                    out.push('0');
+                }
                 for (i, a) in args.iter().enumerate() {
                     if i > 0 {
                         out.push_str(", ");
