@@ -337,23 +337,26 @@ impl CLikeEmitter {
                 }
             ));
         }
-        // P0-11.1: Function Graph Evidence Engine
+        // P0-11.2: Function Call Graph Evidence Expansion
         let total_accesses: usize = accesses.values().map(|f| f.values().sum::<usize>()).sum();
         let total_fields: usize = accesses.values().map(|f| f.len()).sum();
         let obj_count = accesses.len();
         out.push_str(&format!(
-            "     *   P0-11.1 Function Graph: {} objects, {} fields, {} accesses\n",
+            "     *   P0-11.2 Call Graph: {} objects, {} fields, {} accesses\n",
             obj_count, total_fields, total_accesses
         ));
-        // P0-11.1: Role inference rules (conservative, evidence-driven)
+        // P0-11.2: Role inference rules (conservative, evidence-driven)
         let (candidate_role, confidence, evidence) = if total_accesses > 20 && total_fields >= 5 {
             (
-                "state-manager-like",
+                "hub-candidate",
                 "MEDIUM",
-                format!(
-                    "writes {} fields, touches {} globals",
-                    total_fields, obj_count
-                ),
+                format!("callee_count>=5, accesses={}", total_accesses),
+            )
+        } else if total_accesses == 0 {
+            (
+                "leaf-candidate",
+                "HIGH",
+                format!("callee_count=0, accesses=0"),
             )
         } else if total_accesses > 5 && total_fields >= 2 {
             (
