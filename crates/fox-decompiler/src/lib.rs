@@ -14,6 +14,7 @@ pub mod dynamic_plugin;
 pub mod emitter;
 pub mod expression;
 pub mod iat_resolution;
+pub mod c_ast;
 pub mod memory_recovery;
 pub mod object_recovery;
 pub mod signature;

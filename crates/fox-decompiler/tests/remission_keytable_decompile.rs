@@ -157,6 +157,20 @@ fn reality_decompile_keytable() {
         })
         .collect();
     let call_graph = fox_decompiler::DecompilerCallGraphBuilder::build(&all_funcs);
+    // RM-7: Reconstruct C source from structured IR (all_funcs still borrows built_entries).
+    {
+        let cfuncs: Vec<_> = all_funcs
+            .iter()
+            .map(|f| {
+                let mut t = fox_decompiler::c_ast::IrToC::new();
+                t.translate_function(f)
+            })
+            .collect();
+        let src = fox_decompiler::c_ast::CRenderer::render(&cfuncs);
+        std::fs::write(r"C:\Users\Administrator\Desktop\keytable_recovered.c", &src)
+            .expect("write recovered.c");
+        println!("RM-7 wrote keytable_recovered.c ({} bytes, {} funcs)", src.len(), cfuncs.len());
+    }
     let (cg_direct, cg_symbol, cg_unknown) = call_graph.kind_counts();
     println!(
         "P0-11.2.7 Real CallGraph: edges={} (direct={}, symbol={}, unknown={}), distinct callers={}",

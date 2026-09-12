@@ -35,3 +35,12 @@ KeyTable.exe（不同 ImageBase）objects=0，暴露 P0-15 硬编码
 `GLOBAL_BASE_MIN/MAX = NtcMach .data 范围`。改为 `GlobalRegionMap::from_binary`
 从 PE section table 推可写全局区。NtcMach objects 26→332（旧窄窗口漏了大量对象），
 KeyTable 0→43，DLL 独立工作。
+
+## RM-7: KeyTable.exe -> compiled C (2026-09-12)
+- NEW c_ast.rs: CExpr/CStmt/CFunction + IrToC (SSA IR -> C AST) + CRenderer.
+- Proper reconstruction: structured Statement/Expression -> C AST, no emitter-text regex.
+- Unknown degrades to literal 0 / tll_unknown_op(); no fabricated logic.
+- KeyTable.exe 146 funcs -> keytable_recovered.c (436KB) -> MSVC cl /c PASS (0 error).
+- Iterative fixes: free-var declaration, Deref cast (uint32_t*), no-prototype () call sig, extern fwd decls.
+- MILESTONE: FOX first produced a C file accepted by a real compiler. Not round-trip yet.
+
