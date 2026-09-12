@@ -206,6 +206,14 @@ fn batch_decompile_all_ntcmach_functions() {
         var_map.len(),
         var_map.function_count()
     );
+
+    // P0-15: Build recovered object/field evidence across all functions.
+    let obj_map = fox_decompiler::ObjectRecoveryBuilder::build(&all_funcs);
+    println!(
+        "P0-15 Objects: objects={}, fields={}",
+        obj_map.object_count(),
+        obj_map.total_fields()
+    );
     println!("");
 
     // P0-11.2.7 Phase 2: Emit every built function, injecting the real graph.
@@ -222,6 +230,7 @@ fn batch_decompile_all_ntcmach_functions() {
                 Some(&sig_map),
                 Some(&type_map),
                 Some(&var_map),
+                Some(&obj_map),
             ),
             Err(fr) => fr,
         };
@@ -658,6 +667,7 @@ fn emit_single_function(
     signatures: Option<&fox_decompiler::SignatureMap>,
     type_map: Option<&fox_decompiler::TypeMap>,
     var_map: Option<&fox_decompiler::VariableMap>,
+    obj_map: Option<&fox_decompiler::ObjectMap>,
 ) -> FunctionResult {
     let BuiltFunction {
         func,
@@ -700,6 +710,10 @@ fn emit_single_function(
     // P0-14: Inject recovered variable candidates.
     if let Some(vm) = var_map {
         emitter.set_variable_map(vm.clone());
+    }
+    // P0-15: Inject recovered object/field evidence.
+    if let Some(om) = obj_map {
+        emitter.set_object_map(om.clone());
     }
     let output = emitter.emit(&func);
     let output_chars = output.len();

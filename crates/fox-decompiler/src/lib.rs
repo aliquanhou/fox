@@ -13,6 +13,7 @@ pub mod dataflow;
 pub mod dynamic_plugin;
 pub mod emitter;
 pub mod expression;
+pub mod object_recovery;
 pub mod signature;
 pub mod structured_ir;
 pub mod type_propagation;
@@ -38,6 +39,7 @@ pub use dynamic_plugin::{
 };
 pub use emitter::{emit_c_like, emit_c_like_clean, CLikeEmitter, EmitterConfig};
 pub use expression::{BinaryOp, CallTarget, Expression, ExpressionRecovery, PhiIncoming, UnaryOp};
+pub use object_recovery::{FieldCandidate, ObjectCandidate, ObjectMap, ObjectRecoveryBuilder};
 pub use signature::{
     FunctionParameter, FunctionSignature, FunctionSignatureBuilder, ParameterLocation,
     ReturnEvidence, SignatureConfidence, SignatureMap,

@@ -19,6 +19,7 @@ use crate::dataflow::{
     ArgumentSourceKind, CrossFunctionDataFlowGraph, FlowDetail, ReturnConsumerKind,
 };
 use crate::expression::{CallTarget, Expression};
+use crate::object_recovery::ObjectMap;
 use crate::signature::SignatureMap;
 use crate::structured_ir::{AssignTarget, DecompilerFunction, Statement, StatementEvidence};
 use crate::type_propagation::TypeMap;
@@ -128,6 +129,9 @@ pub struct CLikeEmitter {
     /// P0-14: Recovered variable candidates, injected by the caller.
     /// The emitter only READS it.
     var_map: RefCell<Option<VariableMap>>,
+    /// P0-15: Recovered object/field evidence, injected by the caller.
+    /// The emitter only READS it.
+    object_map: RefCell<Option<ObjectMap>>,
 }
 
 impl Default for CLikeEmitter {
@@ -152,6 +156,7 @@ impl CLikeEmitter {
             signatures: RefCell::new(None),
             type_map: RefCell::new(None),
             var_map: RefCell::new(None),
+            object_map: RefCell::new(None),
         }
     }
 
@@ -170,6 +175,7 @@ impl CLikeEmitter {
             signatures: RefCell::new(None),
             type_map: RefCell::new(None),
             var_map: RefCell::new(None),
+            object_map: RefCell::new(None),
         }
     }
 
@@ -196,6 +202,11 @@ impl CLikeEmitter {
     /// P0-14: Inject the recovered variable map. The emitter only READS it.
     pub fn set_variable_map(&self, map: VariableMap) {
         *self.var_map.borrow_mut() = Some(map);
+    }
+
+    /// P0-15: Inject the recovered object/field map. The emitter only READS it.
+    pub fn set_object_map(&self, map: ObjectMap) {
+        *self.object_map.borrow_mut() = Some(map);
     }
 
     /// Emit a DecompilerFunction as C-like pseudocode string.
@@ -259,6 +270,9 @@ impl CLikeEmitter {
 
         // P0-14: Emit recovered variable candidates for this function.
         self.emit_variable_evidence(func_addr, out);
+
+        // P0-15: Emit object/field evidence touched by this function.
+        self.emit_object_evidence(func_addr, out);
 
         // P0-10.1: Record function behavior evidence
         self.function_behavior
@@ -494,6 +508,51 @@ impl CLikeEmitter {
         }
         if vars.len() > 12 {
             out.push_str(&format!("     *   ... ({} more)\n", vars.len() - 12));
+        }
+        out.push_str("     */\n");
+    }
+
+    /// P0-15: Display object/field evidence for objects this function touches.
+    /// Reads the injected ObjectMap; never invents struct/field names.
+    fn emit_object_evidence(&self, func_addr: u64, out: &mut String) {
+        let guard = self.object_map.borrow();
+        let map = match guard.as_ref() {
+            Some(m) => m,
+            None => return,
+        };
+
+        // Objects touched by this function.
+        let touched: Vec<_> = map
+            .objects()
+            .iter()
+            .filter(|o| o.functions.contains(&func_addr))
+            .collect();
+        if touched.is_empty() {
+            return;
+        }
+
+        out.push_str("    /* P0-15 Objects:\n");
+        for o in touched.iter().take(4) {
+            out.push_str(&format!(
+                "     *   {}  ({} functions share it, {} fields)\n",
+                o.name,
+                o.functions.len(),
+                o.fields.len()
+            ));
+            // Fields this function touches.
+            for (_off, f) in o
+                .fields
+                .iter()
+                .filter(|(_, f)| f.touched_by.contains(&func_addr))
+                .take(6)
+            {
+                out.push_str(&format!(
+                    "     *     field_0x{:X}  ({} accesses, {} callers)\n",
+                    f.offset,
+                    f.accesses,
+                    f.touched_by.len()
+                ));
+            }
         }
         out.push_str("     */\n");
     }
