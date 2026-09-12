@@ -160,6 +160,22 @@ fn rm8_roundtrip_decompile() {
         .filter(|f| f.address == 0x140001010) // RM-8: only real user main
         .collect();
     let call_graph = fox_decompiler::DecompilerCallGraphBuilder::build(&all_funcs);
+    // RM-8 debug: dump main statement kinds
+    for f in &all_funcs {
+        eprintln!("[RM8-DBG] func=0x{:X} stmts={}", f.address, f.statements.len());
+        for (i, s) in f.statements.iter().enumerate() {
+            let kind = match s {
+                fox_decompiler::structured_ir::Statement::Assign { .. } => "Assign",
+                fox_decompiler::structured_ir::Statement::If { .. } => "If",
+                fox_decompiler::structured_ir::Statement::GuardClause { .. } => "Guard",
+                fox_decompiler::structured_ir::Statement::Return { .. } => "Return",
+                fox_decompiler::structured_ir::Statement::CallStmt { .. } => "CallStmt",
+                fox_decompiler::structured_ir::Statement::PhiAssign { .. } => "Phi",
+                fox_decompiler::structured_ir::Statement::Unknown { .. } => "Unknown",
+            };
+            eprintln!("  [{}] {}", i, kind);
+        }
+    }
     // RM-7: Reconstruct C source from structured IR (all_funcs still borrows built_entries).
     {
         let cfuncs: Vec<_> = all_funcs
