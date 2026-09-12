@@ -303,7 +303,7 @@ impl SSAConstructor {
         eprintln!("[SSA] construct_proper: {} blocks", ir_func.basic_blocks.len());
 
         // FINAL-1: fail-closed on huge functions to prevent hang.
-        if ir_func.basic_blocks.len() > 500 {
+        if ir_func.basic_blocks.len() > 200 {
             eprintln!("[SSA] SKIP: {} blocks > 500 budget", ir_func.basic_blocks.len());
             return SSAFunction {
                 name: ir_func.name.clone(),
