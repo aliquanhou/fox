@@ -84,3 +84,9 @@ KeyTable 0→43，DLL 独立工作。
 - Output: hits=60 misses=2 sum=10 q=-1 (identical to baseline)
 - First FOX round-trip closure: source->exe->FOX->C->exe->match
 
+
+## RM-8.9 Commercial PE Batch-1 Milestone (2026-09-13)
+- 11/14 PE decompiled, 3232 functions, 3167 recovered, ~12.5MB C
+- All MSVC cl /c 0 errors
+- Remaining: NTCDLLG, M3, M4 hang on SSA convergence
+
