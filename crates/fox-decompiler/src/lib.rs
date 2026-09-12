@@ -13,6 +13,7 @@ pub mod dataflow;
 pub mod dynamic_plugin;
 pub mod emitter;
 pub mod expression;
+pub mod memory_recovery;
 pub mod object_recovery;
 pub mod signature;
 pub mod structured_ir;

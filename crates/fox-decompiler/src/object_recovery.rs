@@ -159,6 +159,8 @@ struct FuncScan {
     regions: GlobalRegionMap,
     /// `reg_version` -> global base it currently points to (P0-8.3 style).
     reg_to_base: HashMap<String, u64>,
+    /// GAP-RM-2: bare register name -> global base (lift text uses no version).
+    reg_name_to_base: HashMap<String, u64>,
     /// (object base, offset) -> access count, aggregated across functions.
     access: HashMap<(u64, u64), usize>,
     /// (object base) -> functions touching it.
@@ -174,6 +176,7 @@ impl FuncScan {
         Self {
             regions,
             reg_to_base: HashMap::new(),
+            reg_name_to_base: HashMap::new(),
             access: HashMap::new(),
             obj_funcs: HashMap::new(),
             field_funcs: HashMap::new(),
@@ -234,6 +237,27 @@ impl FuncScan {
             Expression::Constant(addr) if self.regions.contains(*addr) => {
                 self.pure_globals.insert(*addr);
             }
+            // GAP-RM-2: lift memory operand text "[ecx+0x24]" inside Unknown reason.
+            Expression::Unknown { reason } => {
+                if let Some(p) = crate::memory_recovery::parse_memory_operand(reason) {
+                    match p.base {
+                        Some(reg) => {
+                            if let Some(&base) = self.reg_name_to_base.get(&reg) {
+                                if p.offset > 0 {
+                                    self.record(base, p.offset as u64, func);
+                                } else if p.offset == 0 {
+                                    self.record(base, 0, func);
+                                }
+                            }
+                        }
+                        None => {
+                            if p.offset > 0 && self.regions.contains(p.offset as u64) {
+                                self.pure_globals.insert(p.offset as u64);
+                            }
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -271,6 +295,8 @@ impl FuncScan {
                         if let AssignTarget::Variable { name, version, .. } = lhs {
                             self.reg_to_base
                                 .insert(format!("{}_{}", name, version), *addr);
+                            // GAP-RM-2: also record bare name for lift-text parsing.
+                            self.reg_name_to_base.insert(name.clone(), *addr);
                         }
                     }
                 }
