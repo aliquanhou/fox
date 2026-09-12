@@ -39,7 +39,9 @@ pub use dynamic_plugin::{
 };
 pub use emitter::{emit_c_like, emit_c_like_clean, CLikeEmitter, EmitterConfig};
 pub use expression::{BinaryOp, CallTarget, Expression, ExpressionRecovery, PhiIncoming, UnaryOp};
-pub use object_recovery::{FieldCandidate, ObjectCandidate, ObjectMap, ObjectRecoveryBuilder};
+pub use object_recovery::{
+    FieldCandidate, GlobalRegionMap, ObjectCandidate, ObjectMap, ObjectRecoveryBuilder,
+};
 pub use signature::{
     FunctionParameter, FunctionSignature, FunctionSignatureBuilder, ParameterLocation,
     ReturnEvidence, SignatureConfidence, SignatureMap,

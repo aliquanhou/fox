@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 fn ntcmach_path() -> PathBuf {
-    PathBuf::from(r"C:\Users\Administrator\Desktop\制版软件\NtcMach.exe")
+    PathBuf::from(r"C:\Users\Administrator\Desktop\制版软件\KeyTable.exe")
 }
 
 #[derive(Debug, Clone)]
@@ -49,7 +49,7 @@ enum FunctionStatus {
 }
 
 #[test]
-fn batch_decompile_all_ntcmach_functions() {
+fn reality_decompile_keytable() {
     let start = Instant::now();
     let path = ntcmach_path();
     let data = std::fs::read(&path).expect("read NtcMach");

@@ -19,13 +19,74 @@
 
 use crate::expression::{BinaryOp, Expression};
 use crate::structured_ir::{AssignTarget, DecompilerFunction, Statement};
+use fox_binary::Binary;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-/// Loader data range that FOX treats as writable global objects (matches P0-8.2).
-const GLOBAL_BASE_MIN: u64 = 0x460000;
-const GLOBAL_BASE_MAX: u64 = 0x480000;
 /// Max positive offset before we stop treating it as a struct field.
 const MAX_FIELD_OFFSET: u64 = 0x1_000_000;
+
+/// One writable data section (.data/.bss) that can hold global objects.
+#[derive(Debug, Clone)]
+pub struct GlobalRegion {
+    pub name: String,
+    pub va_start: u64,
+    pub va_end: u64,
+}
+
+/// GAP-RM-1: writable global regions derived from the PE section table,
+/// NOT hard-coded addresses. This makes Object Recovery portable across
+/// any PE (different ImageBase / .data layout).
+#[derive(Debug, Clone, Default)]
+pub struct GlobalRegionMap {
+    regions: Vec<GlobalRegion>,
+}
+
+impl GlobalRegionMap {
+    /// Build from a parsed binary: writable, non-executable sections
+    /// (.data, .bss, writable .rdata) whose VA = image_base + RVA.
+    pub fn from_binary(bin: &Binary) -> Self {
+        let regions = bin
+            .sections
+            .iter()
+            .filter(|s| s.is_writable() && !s.is_executable())
+            .map(|s| GlobalRegion {
+                name: s.name.clone(),
+                va_start: bin.image_base + s.virtual_address,
+                va_end: bin.image_base + s.virtual_address + s.virtual_size as u64,
+            })
+            .collect();
+        Self { regions }
+    }
+
+    /// Build from explicit ranges (tests).
+    pub fn from_ranges(ranges: Vec<(u64, u64)>) -> Self {
+        Self {
+            regions: ranges
+                .into_iter()
+                .enumerate()
+                .map(|(i, (a, b))| GlobalRegion {
+                    name: format!("region_{}", i),
+                    va_start: a,
+                    va_end: b,
+                })
+                .collect(),
+        }
+    }
+
+    pub fn contains(&self, addr: u64) -> bool {
+        self.regions
+            .iter()
+            .any(|r| addr >= r.va_start && addr < r.va_end)
+    }
+
+    pub fn len(&self) -> usize {
+        self.regions.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.regions.is_empty()
+    }
+}
 
 /// One recovered field inside an object.
 #[derive(Debug, Clone)]
@@ -94,6 +155,8 @@ impl ObjectMap {
 
 /// Accumulator used while walking one function.
 struct FuncScan {
+    /// Writable global regions (from PE section table).
+    regions: GlobalRegionMap,
     /// `reg_version` -> global base it currently points to (P0-8.3 style).
     reg_to_base: HashMap<String, u64>,
     /// (object base, offset) -> access count, aggregated across functions.
@@ -107,8 +170,9 @@ struct FuncScan {
 }
 
 impl FuncScan {
-    fn new() -> Self {
+    fn new(regions: GlobalRegionMap) -> Self {
         Self {
+            regions,
             reg_to_base: HashMap::new(),
             access: HashMap::new(),
             obj_funcs: HashMap::new(),
@@ -167,9 +231,7 @@ impl FuncScan {
                 }
             }
             // Pure global constant address -> object itself.
-            Expression::Constant(addr)
-                if (GLOBAL_BASE_MIN..=GLOBAL_BASE_MAX).contains(addr) =>
-            {
+            Expression::Constant(addr) if self.regions.contains(*addr) => {
                 self.pure_globals.insert(*addr);
             }
             _ => {}
@@ -205,7 +267,7 @@ impl FuncScan {
             Statement::Assign { lhs, rhs, .. } => {
                 // P0-8.3: if rhs is a pure global constant, remember lhs reg points to it.
                 if let Expression::Constant(addr) = rhs {
-                    if (GLOBAL_BASE_MIN..=GLOBAL_BASE_MAX).contains(addr) {
+                    if self.regions.contains(*addr) {
                         if let AssignTarget::Variable { name, version, .. } = lhs {
                             self.reg_to_base
                                 .insert(format!("{}_{}", name, version), *addr);
@@ -246,8 +308,7 @@ impl FuncScan {
                 }
             }
             Statement::PhiAssign {
-                lhs:
-                    AssignTarget::Variable { name, version, .. },
+                lhs: AssignTarget::Variable { name, version, .. },
                 incoming,
                 ..
             } => {
@@ -267,8 +328,8 @@ impl FuncScan {
 pub struct ObjectRecoveryBuilder;
 
 impl ObjectRecoveryBuilder {
-    pub fn build(funcs: &[&DecompilerFunction]) -> ObjectMap {
-        let mut scan = FuncScan::new();
+    pub fn build(funcs: &[&DecompilerFunction], regions: &GlobalRegionMap) -> ObjectMap {
+        let mut scan = FuncScan::new(regions.clone());
         for func in funcs {
             for stmt in &func.statements {
                 scan.walk_stmt(stmt, func.address);
@@ -327,6 +388,11 @@ mod tests {
         AssignTarget, DecompilerFunction, FunctionEvidence, Statement, StatementEvidence,
         VariableOrigin,
     };
+
+    /// Writable region covering the test constants (0x460000-0x480000).
+    fn test_regions() -> GlobalRegionMap {
+        GlobalRegionMap::from_ranges(vec![(0x460000, 0x480000)])
+    }
 
     fn ev() -> StatementEvidence {
         StatementEvidence {
@@ -391,7 +457,7 @@ mod tests {
         let f = func(load_then_access("ecx", 1, 0x10));
         let more = load_then_access("ecx", 2, 0x14);
         let f = func([f.statements, more].concat());
-        let map = ObjectRecoveryBuilder::build(&[&f]);
+        let map = ObjectRecoveryBuilder::build(&[&f], &test_regions());
         assert_eq!(map.object_count(), 1, "one base -> one object");
         assert_eq!(
             map.fields_of_object(0x46E920).unwrap().len(),
@@ -409,7 +475,7 @@ mod tests {
             *rhs = Expression::Constant(0x470000);
         }
         let f2 = func(stmts);
-        let map = ObjectRecoveryBuilder::build(&[&f1, &f2]);
+        let map = ObjectRecoveryBuilder::build(&[&f1, &f2], &test_regions());
         assert_eq!(map.object_count(), 2);
     }
 
@@ -419,7 +485,7 @@ mod tests {
         let mut stmts = load_then_access("ecx", 1, 0x10);
         stmts.extend(load_then_access("ecx", 4, 0x10));
         let f = func(stmts);
-        let map = ObjectRecoveryBuilder::build(&[&f]);
+        let map = ObjectRecoveryBuilder::build(&[&f], &test_regions());
         let field = map.field_at_offset(0x46E920, 0x10).unwrap();
         assert_eq!(field.accesses, 2);
     }
@@ -434,7 +500,7 @@ mod tests {
             },
             Expression::Constant(0x1234),
         )]);
-        let map = ObjectRecoveryBuilder::build(&[&f]);
+        let map = ObjectRecoveryBuilder::build(&[&f], &test_regions());
         assert_eq!(map.object_count(), 0, "fail-closed: unrelated constant");
     }
 
@@ -447,7 +513,7 @@ mod tests {
             },
             Expression::Constant(0),
         )]);
-        let map = ObjectRecoveryBuilder::build(&[&f]);
+        let map = ObjectRecoveryBuilder::build(&[&f], &test_regions());
         assert!(map.object_of_address(0x46E920).is_some());
     }
 }
