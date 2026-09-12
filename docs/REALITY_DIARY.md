@@ -78,3 +78,9 @@ KeyTable 0→43，DLL 独立工作。
 - Result: rm8 729 functions analyzed in 55s, recovered.c 1.8MB generated. No hang.
 - Known GAP: Function Discovery reports 729 functions for a small PE (false positives from data/jump tables), to fix next.
 
+
+## RM-8 ROUND-TRIP SUCCESS (2026-09-12)
+- rm8_roundtrip.c (/O2) -> FOX -> rm8_recovered.c -> MSVC -> rm8_recovered.exe
+- Output: hits=60 misses=2 sum=10 q=-1 (identical to baseline)
+- First FOX round-trip closure: source->exe->FOX->C->exe->match
+
