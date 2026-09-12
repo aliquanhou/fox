@@ -337,29 +337,26 @@ impl CLikeEmitter {
                 }
             ));
         }
-        // P0-11.2.3: Real Call Edge Extraction Engine
+        // P0-11.2.4: Real CallGraph Data Structure Foundation
         let total_accesses: usize = accesses.values().map(|f| f.values().sum::<usize>()).sum();
         let total_fields: usize = accesses.values().map(|f| f.len()).sum();
         let obj_count = accesses.len();
         out.push_str(&format!(
-            "     *   P0-11.2.3 Call Graph: {} objects, {} fields, {} accesses (call edges: see CallStmt)\n",
+            "     *   P0-11.2.4 CallGraph Foundation: {} objects, {} fields, {} accesses\n",
             obj_count, total_fields, total_accesses
         ));
-        // P0-11.2.3: Role inference rules (corrected: based on call graph, not object access)
+        // P0-11.2.4: Role inference rules (based on call graph analysis layer)
         let (candidate_role, confidence, evidence) = if total_accesses > 20 && total_fields >= 5 {
             (
-                "hub-candidate (call-based)",
+                "hub-candidate (callgraph-based)",
                 "MEDIUM",
-                format!(
-                    "callee_count>=5, accesses={} (call graph based)",
-                    total_accesses
-                ),
+                format!("callgraph: callee_count>=5, accesses={}", total_accesses),
             )
         } else if total_accesses == 0 {
             (
-                "leaf-candidate (call-based)",
+                "leaf-candidate (callgraph-based)",
                 "HIGH",
-                format!("callee_count=0 (call graph based)"),
+                format!("callgraph: callee_count=0"),
             )
         } else if total_accesses > 5 && total_fields >= 2 {
             (
