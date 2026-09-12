@@ -231,7 +231,31 @@ impl IrToC {
             Expression::Load { address } => CExpr::Deref(Box::new(self.translate_expr(address))),
             Expression::Call { target, arguments } => self.translate_call(target, arguments),
             Expression::Phi { .. } => CExpr::Unknown,
-            Expression::Unknown { .. } => CExpr::Unknown,
+            Expression::Unknown { reason } => {
+                // RM-7.1: recover real memory operands from lift text.
+                if reason.contains("stack pointer") {
+                    // A pop reads from the stack top: model as *(esp).
+                    CExpr::Deref(Box::new(CExpr::Var(self.tmp_name("esp", 0))))
+                } else if let Some(pm) = crate::memory_recovery::parse_memory_operand(reason) {
+                    match pm.base {
+                        None => CExpr::Const(pm.offset as u64),
+                        Some(reg) => {
+                            let base = CExpr::Var(self.tmp_name(&reg, 0));
+                            if pm.offset == 0 {
+                                base
+                            } else {
+                                CExpr::Binary {
+                                    op: '+',
+                                    left: Box::new(base),
+                                    right: Box::new(CExpr::Const((pm.offset) as u64)),
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    CExpr::Unknown
+                }
+            }
         }
     }
 }

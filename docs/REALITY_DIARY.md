@@ -44,3 +44,11 @@ KeyTable 0→43，DLL 独立工作。
 - Iterative fixes: free-var declaration, Deref cast (uint32_t*), no-prototype () call sig, extern fwd decls.
 - MILESTONE: FOX first produced a C file accepted by a real compiler. Not round-trip yet.
 
+
+## RM-7.1: Memory Access Reconstruction (2026-09-12)
+- Audit caught 662 *(uint32_t*)(0): all memory access degraded to NULL because Load.address was Unknown{reason}.
+- c_ast Unknown branch now parses lift reason text via memory_recovery:
+  'memory operand: [ecx+0x24]' -> base+offset; 'stack pointer (Pop)' -> *(esp).
+- KeyTable: deref-literal-0 662 -> 0, MSVC cl /c still PASS.
+- No field-name/type guessing; raw address/register-offset preserved.
+
