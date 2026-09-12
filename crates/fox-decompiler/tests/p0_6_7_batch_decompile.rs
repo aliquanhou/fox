@@ -164,6 +164,21 @@ fn batch_decompile_all_ntcmach_functions() {
         cg_unknown,
         call_graph.caller_count()
     );
+
+    // P0-11.3: Build cross-function data-flow graph on top of the call graph.
+    let data_flow = fox_decompiler::CrossFunctionDataFlowBuilder::build(&all_funcs, &call_graph);
+    let (df_const, df_reg, df_mem, df_comp, df_unk) = data_flow.argument_source_counts();
+    println!(
+        "P0-11.3 CrossFunction DataFlow: edges={} (args={}, returns={}), arg sources: const={}, reg={}, mem={}, computed={}, unknown={}",
+        data_flow.edge_count(),
+        data_flow.argument_count(),
+        data_flow.return_count(),
+        df_const,
+        df_reg,
+        df_mem,
+        df_comp,
+        df_unk
+    );
     println!("");
 
     // P0-11.2.7 Phase 2: Emit every built function, injecting the real graph.
@@ -171,7 +186,9 @@ fn batch_decompile_all_ntcmach_functions() {
         let addr = entry.addr;
         let name = entry.name;
         let func_result = match entry.built {
-            Ok(built) => emit_single_function(built, addr, &name, Some(&call_graph)),
+            Ok(built) => {
+                emit_single_function(built, addr, &name, Some(&call_graph), Some(&data_flow))
+            }
             Err(fr) => fr,
         };
 
@@ -603,6 +620,7 @@ fn emit_single_function(
     addr: u64,
     name: &str,
     callgraph: Option<&fox_decompiler::DecompilerCallGraph>,
+    dataflow: Option<&fox_decompiler::CrossFunctionDataFlowGraph>,
 ) -> FunctionResult {
     let BuiltFunction {
         func,
@@ -629,6 +647,10 @@ fn emit_single_function(
     // P0-11.2.7: Inject the REAL call graph so edges are displayed honestly.
     if let Some(g) = callgraph {
         emitter.set_callgraph(g.clone());
+    }
+    // P0-11.3: Inject cross-function data-flow graph (argument/return).
+    if let Some(df) = dataflow {
+        emitter.set_dataflow(df.clone());
     }
     let output = emitter.emit(&func);
     let output_chars = output.len();

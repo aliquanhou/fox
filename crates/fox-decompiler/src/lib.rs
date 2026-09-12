@@ -9,6 +9,7 @@
 pub mod callgraph;
 pub mod condition;
 pub mod control_structure;
+pub mod dataflow;
 pub mod dynamic_plugin;
 pub mod emitter;
 pub mod expression;
@@ -23,6 +24,10 @@ pub use condition::{
 pub use control_structure::{
     recover_control_structures, ControlStructure, GuardClause, IfElse, StructureEvidence,
     UnknownBranch,
+};
+pub use dataflow::{
+    ArgumentSourceKind, CrossFunctionDataFlowBuilder, CrossFunctionDataFlowGraph, DataFlowEdge,
+    FlowDetail, FlowKind, ReturnConsumerKind,
 };
 pub use dynamic_plugin::{
     build_external_call_name_map, build_iat_map_from_imports, resolutions_to_call_targets,

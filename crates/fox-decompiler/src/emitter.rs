@@ -15,6 +15,9 @@
 
 use crate::callgraph::DecompilerCallGraph;
 use crate::condition::ConditionRecovery;
+use crate::dataflow::{
+    ArgumentSourceKind, CrossFunctionDataFlowGraph, FlowDetail, ReturnConsumerKind,
+};
 use crate::expression::{CallTarget, Expression};
 use crate::structured_ir::{AssignTarget, DecompilerFunction, Statement, StatementEvidence};
 use std::cell::RefCell;
@@ -110,6 +113,9 @@ pub struct CLikeEmitter {
     /// When present, the emitter displays REAL caller/callee evidence from edges,
     /// instead of deriving pseudo-call-graph stats from field accesses.
     callgraph: RefCell<Option<DecompilerCallGraph>>,
+    /// P0-11.3: Cross-function data-flow graph (argument/return edges), injected
+    /// by the caller. The emitter only READS it.
+    dataflow: RefCell<Option<CrossFunctionDataFlowGraph>>,
 }
 
 impl Default for CLikeEmitter {
@@ -130,6 +136,7 @@ impl CLikeEmitter {
             field_behavior: RefCell::new(HashMap::new()),
             function_behavior: RefCell::new(HashMap::new()),
             callgraph: RefCell::new(None),
+            dataflow: RefCell::new(None),
         }
     }
 
@@ -144,12 +151,18 @@ impl CLikeEmitter {
             field_behavior: RefCell::new(HashMap::new()),
             function_behavior: RefCell::new(HashMap::new()),
             callgraph: RefCell::new(None),
+            dataflow: RefCell::new(None),
         }
     }
 
     /// P0-11.2.7: Inject the real call graph. The emitter only READS it.
     pub fn set_callgraph(&self, graph: DecompilerCallGraph) {
         *self.callgraph.borrow_mut() = Some(graph);
+    }
+
+    /// P0-11.3: Inject the cross-function data-flow graph. The emitter only READS it.
+    pub fn set_dataflow(&self, graph: CrossFunctionDataFlowGraph) {
+        *self.dataflow.borrow_mut() = Some(graph);
     }
 
     /// Emit a DecompilerFunction as C-like pseudocode string.
@@ -201,6 +214,9 @@ impl CLikeEmitter {
 
         // P0-11.2.7: Emit REAL call graph evidence (caller/callee from edges).
         self.emit_callgraph_evidence(func_addr, out);
+
+        // P0-11.3: Emit cross-function data-flow evidence (argument/return).
+        self.emit_dataflow_evidence(func_addr, out);
 
         // P0-10.1: Record function behavior evidence
         self.function_behavior
@@ -260,6 +276,64 @@ impl CLikeEmitter {
             };
             out.push_str(&format!("     *     - {} [{}]\n", target, e.kind.label()));
         }
+        out.push_str("     */\n");
+    }
+
+    /// P0-11.3: Display cross-function data-flow evidence for this function.
+    ///
+    /// Reads the injected CrossFunctionDataFlowGraph (built from SSA CallStmt
+    /// arguments + CallBehavior). It only reports evidence: argument origins
+    /// and how each callee's return value is consumed. It never names functions.
+    fn emit_dataflow_evidence(&self, caller_addr: u64, out: &mut String) {
+        let graph_guard = self.dataflow.borrow();
+        let graph = match graph_guard.as_ref() {
+            Some(g) => g,
+            None => return,
+        };
+
+        let flows = graph.flows_of(caller_addr);
+        if flows.is_empty() {
+            return; // no recovered data flow: stay silent, fail-closed
+        }
+
+        // Tally argument origins for the calls this function makes.
+        let mut const_args = 0usize;
+        let mut reg_args = 0usize;
+        let mut mem_args = 0usize;
+        let mut comp_args = 0usize;
+        let mut ret_condition = 0usize;
+        let mut ret_instruction = 0usize;
+        let mut ret_none = 0usize;
+        for f in &flows {
+            match &f.detail {
+                FlowDetail::Argument { source, .. } => match source {
+                    ArgumentSourceKind::Constant => const_args += 1,
+                    ArgumentSourceKind::Register => reg_args += 1,
+                    ArgumentSourceKind::MemoryLoad => mem_args += 1,
+                    ArgumentSourceKind::Computed => comp_args += 1,
+                    ArgumentSourceKind::Unknown => {}
+                },
+                FlowDetail::Return { consumer } => match consumer {
+                    ReturnConsumerKind::Condition => ret_condition += 1,
+                    ReturnConsumerKind::Instruction { .. } => ret_instruction += 1,
+                    ReturnConsumerKind::NoConsumer => ret_none += 1,
+                },
+            }
+        }
+
+        out.push_str("    /* P0-11.3 DataFlow:\n");
+        out.push_str(&format!(
+            "     *   args passed: {} (const {}, reg {}, mem {}, computed {})\n",
+            const_args + reg_args + mem_args + comp_args,
+            const_args,
+            reg_args,
+            mem_args,
+            comp_args
+        ));
+        out.push_str(&format!(
+            "     *   return used: condition {}, instruction {}, ignored {}\n",
+            ret_condition, ret_instruction, ret_none
+        ));
         out.push_str("     */\n");
     }
 
