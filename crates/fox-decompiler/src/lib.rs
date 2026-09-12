@@ -16,6 +16,7 @@ pub mod expression;
 pub mod signature;
 pub mod structured_ir;
 pub mod type_propagation;
+pub mod variable_recovery;
 
 pub use callgraph::{
     DecompilerCallEdge, DecompilerCallGraph, DecompilerCallGraphBuilder, DecompilerCallKind,
@@ -49,6 +50,7 @@ pub use type_propagation::{
     FieldTypeFact, TypeCandidate, TypeConfidence, TypeKey, TypeKind, TypeMap,
     TypePropagationBuilder,
 };
+pub use variable_recovery::{Variable, VariableMap, VariableRecoveryBuilder};
 
 pub struct Decompiler;
 

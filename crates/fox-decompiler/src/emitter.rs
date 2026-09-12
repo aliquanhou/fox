@@ -22,6 +22,7 @@ use crate::expression::{CallTarget, Expression};
 use crate::signature::SignatureMap;
 use crate::structured_ir::{AssignTarget, DecompilerFunction, Statement, StatementEvidence};
 use crate::type_propagation::TypeMap;
+use crate::variable_recovery::VariableMap;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -124,6 +125,9 @@ pub struct CLikeEmitter {
     /// P0-13: Propagated type candidates, injected by the caller.
     /// The emitter only READS it.
     type_map: RefCell<Option<TypeMap>>,
+    /// P0-14: Recovered variable candidates, injected by the caller.
+    /// The emitter only READS it.
+    var_map: RefCell<Option<VariableMap>>,
 }
 
 impl Default for CLikeEmitter {
@@ -147,6 +151,7 @@ impl CLikeEmitter {
             dataflow: RefCell::new(None),
             signatures: RefCell::new(None),
             type_map: RefCell::new(None),
+            var_map: RefCell::new(None),
         }
     }
 
@@ -164,6 +169,7 @@ impl CLikeEmitter {
             dataflow: RefCell::new(None),
             signatures: RefCell::new(None),
             type_map: RefCell::new(None),
+            var_map: RefCell::new(None),
         }
     }
 
@@ -185,6 +191,11 @@ impl CLikeEmitter {
     /// P0-13: Inject the propagated type map. The emitter only READS it.
     pub fn set_type_map(&self, map: TypeMap) {
         *self.type_map.borrow_mut() = Some(map);
+    }
+
+    /// P0-14: Inject the recovered variable map. The emitter only READS it.
+    pub fn set_variable_map(&self, map: VariableMap) {
+        *self.var_map.borrow_mut() = Some(map);
     }
 
     /// Emit a DecompilerFunction as C-like pseudocode string.
@@ -245,6 +256,9 @@ impl CLikeEmitter {
 
         // P0-13: Emit propagated type candidates for this function's args/return.
         self.emit_type_evidence(func_addr, out);
+
+        // P0-14: Emit recovered variable candidates for this function.
+        self.emit_variable_evidence(func_addr, out);
 
         // P0-10.1: Record function behavior evidence
         self.function_behavior
@@ -450,6 +464,36 @@ impl CLikeEmitter {
                     cand.confidence.label()
                 ));
             }
+        }
+        out.push_str("     */\n");
+    }
+
+    /// P0-14: Display recovered variable candidates for this function.
+    /// Reads the injected VariableMap; never names a variable or guesses purpose.
+    fn emit_variable_evidence(&self, func_addr: u64, out: &mut String) {
+        let guard = self.var_map.borrow();
+        let map = match guard.as_ref() {
+            Some(m) => m,
+            None => return,
+        };
+        let vars = map.variables_of_function(func_addr);
+        if vars.is_empty() {
+            return;
+        }
+
+        out.push_str("    /* P0-14 Variables:\n");
+        for v in vars.iter().take(12) {
+            let phi = if v.has_phi { " (phi)" } else { "" };
+            out.push_str(&format!(
+                "     *   variable_{}: {}  [{} SSA version(s)]{}\n",
+                v.index,
+                v.register,
+                v.def_versions.len(),
+                phi
+            ));
+        }
+        if vars.len() > 12 {
+            out.push_str(&format!("     *   ... ({} more)\n", vars.len() - 12));
         }
         out.push_str("     */\n");
     }

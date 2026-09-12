@@ -198,6 +198,14 @@ fn batch_decompile_all_ntcmach_functions() {
         type_map.known_count(),
         type_map.len() - type_map.known_count()
     );
+
+    // P0-14: Build recovered variable candidates across all functions.
+    let var_map = fox_decompiler::VariableRecoveryBuilder::build(&all_funcs);
+    println!(
+        "P0-14 Variables: total variables={}, functions={}",
+        var_map.len(),
+        var_map.function_count()
+    );
     println!("");
 
     // P0-11.2.7 Phase 2: Emit every built function, injecting the real graph.
@@ -213,6 +221,7 @@ fn batch_decompile_all_ntcmach_functions() {
                 Some(&data_flow),
                 Some(&sig_map),
                 Some(&type_map),
+                Some(&var_map),
             ),
             Err(fr) => fr,
         };
@@ -648,6 +657,7 @@ fn emit_single_function(
     dataflow: Option<&fox_decompiler::CrossFunctionDataFlowGraph>,
     signatures: Option<&fox_decompiler::SignatureMap>,
     type_map: Option<&fox_decompiler::TypeMap>,
+    var_map: Option<&fox_decompiler::VariableMap>,
 ) -> FunctionResult {
     let BuiltFunction {
         func,
@@ -686,6 +696,10 @@ fn emit_single_function(
     // P0-13: Inject propagated type candidates.
     if let Some(tm) = type_map {
         emitter.set_type_map(tm.clone());
+    }
+    // P0-14: Inject recovered variable candidates.
+    if let Some(vm) = var_map {
+        emitter.set_variable_map(vm.clone());
     }
     let output = emitter.emit(&func);
     let output_chars = output.len();
