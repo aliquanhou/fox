@@ -337,29 +337,29 @@ impl CLikeEmitter {
                 }
             ));
         }
-        // P0-11.2.5: Real CallGraph Builder Foundation
+        // P0-11.2.6: Real CallGraph Core Foundation
         let total_accesses: usize = accesses.values().map(|f| f.values().sum::<usize>()).sum();
         let total_fields: usize = accesses.values().map(|f| f.len()).sum();
         let obj_count = accesses.len();
         out.push_str(&format!(
-            "     *   P0-11.2.5 CallGraph Builder: {} objects, {} fields, {} accesses\n",
+            "     *   P0-11.2.6 CallGraph Core: {} objects, {} fields, {} accesses\n",
             obj_count, total_fields, total_accesses
         ));
-        // P0-11.2.5: Role inference rules (based on callgraph builder analysis)
+        // P0-11.2.6: Role inference rules (based on callgraph core analysis)
         let (candidate_role, confidence, evidence) = if total_accesses > 20 && total_fields >= 5 {
             (
-                "hub-candidate (callgraph-builder)",
+                "hub-candidate (callgraph-core)",
                 "MEDIUM",
                 format!(
-                    "callgraph-builder: callee_count>=5, accesses={}",
+                    "callgraph-core: callee_count>=5, accesses={}",
                     total_accesses
                 ),
             )
         } else if total_accesses == 0 {
             (
-                "leaf-candidate (callgraph-builder)",
+                "leaf-candidate (callgraph-core)",
                 "HIGH",
-                format!("callgraph-builder: callee_count=0"),
+                format!("callgraph-core: callee_count=0"),
             )
         } else if total_accesses > 5 && total_fields >= 2 {
             (
