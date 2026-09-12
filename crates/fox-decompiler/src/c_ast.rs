@@ -417,6 +417,19 @@ impl CRenderer {
                 out.push(')');
             }
             CExpr::Deref(inner) => {
+                // FINAL-B1: struct.field_0xNN promotion
+                if let CExpr::Binary { op, left, right } = inner.as_ref() {
+                    if *op == '+' {
+                        if let CExpr::Const(offset) = right.as_ref() {
+                            if *offset >= 0x10 && *offset <= 0x1000 {
+                                out.push_str(&format!("/*f_0x{:X}*/", offset));
+                                Self::render_expr(left, out);
+                                out.push_str(&format!("->field_0x{:X}", offset));
+                                return;
+                            }
+                        }
+                    }
+                }
                 out.push_str("(*((uint32_t*)(");
                 Self::render_expr(inner, out);
                 out.push_str(")))");
