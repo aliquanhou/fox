@@ -302,6 +302,23 @@ impl SSAConstructor {
         use crate::dominators::DominatorTree;
         eprintln!("[SSA] construct_proper: {} blocks", ir_func.basic_blocks.len());
 
+        // FINAL-1: fail-closed on huge functions to prevent hang.
+        if ir_func.basic_blocks.len() > 500 {
+            eprintln!("[SSA] SKIP: {} blocks > 500 budget", ir_func.basic_blocks.len());
+            return SSAFunction {
+                name: ir_func.name.clone(),
+                address: ir_func.address.0,
+                basic_blocks: Vec::new(),
+                entry_block: 0,
+                phi_nodes: Vec::new(),
+                variable_versions: HashMap::new(),
+                evidence: Vec::new(),
+                use_def_chains: HashMap::new(),
+                def_use_chains: HashMap::new(),
+                proper_renaming: false,
+            };
+        }
+
         // Step 1: Collect definition blocks
         let mut def_blocks: HashMap<String, HashSet<usize>> = HashMap::new();
         for block in &ir_func.basic_blocks {
