@@ -121,6 +121,16 @@ impl SignatureMap {
         self.signatures.get(&function)
     }
 
+    /// Iterate all (callee, signature) pairs.
+    pub fn iter(&self) -> impl Iterator<Item = (u64, &FunctionSignature)> {
+        self.signatures.iter().map(|(k, v)| (*k, v))
+    }
+
+    /// Insert a signature (test / builder use).
+    pub fn insert(&mut self, sig: FunctionSignature) {
+        self.signatures.insert(sig.function, sig);
+    }
+
     pub fn len(&self) -> usize {
         self.signatures.len()
     }

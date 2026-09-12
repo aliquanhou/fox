@@ -15,6 +15,7 @@ pub mod emitter;
 pub mod expression;
 pub mod signature;
 pub mod structured_ir;
+pub mod type_propagation;
 
 pub use callgraph::{
     DecompilerCallEdge, DecompilerCallGraph, DecompilerCallGraphBuilder, DecompilerCallKind,
@@ -43,6 +44,10 @@ pub use signature::{
 pub use structured_ir::{
     AssignTarget, CallBehavior, DecompilerFunction, FunctionEvidence, Statement, StatementEvidence,
     StructuredIRBudget, StructuredIRBuilder, VariableOrigin,
+};
+pub use type_propagation::{
+    FieldTypeFact, TypeCandidate, TypeConfidence, TypeKey, TypeKind, TypeMap,
+    TypePropagationBuilder,
 };
 
 pub struct Decompiler;

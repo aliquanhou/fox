@@ -189,6 +189,15 @@ fn batch_decompile_all_ntcmach_functions() {
         sig_map.with_param_count(1),
         sig_map.with_param_count(2)
     );
+
+    // P0-13: Propagate type candidates from signatures (field facts empty this phase).
+    let type_map = fox_decompiler::TypePropagationBuilder::build(&sig_map, &[]);
+    println!(
+        "P0-13 Type Candidates: keys={}, known={}, unknown={}",
+        type_map.len(),
+        type_map.known_count(),
+        type_map.len() - type_map.known_count()
+    );
     println!("");
 
     // P0-11.2.7 Phase 2: Emit every built function, injecting the real graph.
@@ -203,6 +212,7 @@ fn batch_decompile_all_ntcmach_functions() {
                 Some(&call_graph),
                 Some(&data_flow),
                 Some(&sig_map),
+                Some(&type_map),
             ),
             Err(fr) => fr,
         };
@@ -637,6 +647,7 @@ fn emit_single_function(
     callgraph: Option<&fox_decompiler::DecompilerCallGraph>,
     dataflow: Option<&fox_decompiler::CrossFunctionDataFlowGraph>,
     signatures: Option<&fox_decompiler::SignatureMap>,
+    type_map: Option<&fox_decompiler::TypeMap>,
 ) -> FunctionResult {
     let BuiltFunction {
         func,
@@ -671,6 +682,10 @@ fn emit_single_function(
     // P0-12: Inject per-callee signature map.
     if let Some(sm) = signatures {
         emitter.set_signatures(sm.clone());
+    }
+    // P0-13: Inject propagated type candidates.
+    if let Some(tm) = type_map {
+        emitter.set_type_map(tm.clone());
     }
     let output = emitter.emit(&func);
     let output_chars = output.len();

@@ -21,6 +21,7 @@ use crate::dataflow::{
 use crate::expression::{CallTarget, Expression};
 use crate::signature::SignatureMap;
 use crate::structured_ir::{AssignTarget, DecompilerFunction, Statement, StatementEvidence};
+use crate::type_propagation::TypeMap;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -120,6 +121,9 @@ pub struct CLikeEmitter {
     /// P0-12: Per-callee function signatures, injected by the caller.
     /// The emitter only READS it.
     signatures: RefCell<Option<SignatureMap>>,
+    /// P0-13: Propagated type candidates, injected by the caller.
+    /// The emitter only READS it.
+    type_map: RefCell<Option<TypeMap>>,
 }
 
 impl Default for CLikeEmitter {
@@ -142,6 +146,7 @@ impl CLikeEmitter {
             callgraph: RefCell::new(None),
             dataflow: RefCell::new(None),
             signatures: RefCell::new(None),
+            type_map: RefCell::new(None),
         }
     }
 
@@ -158,6 +163,7 @@ impl CLikeEmitter {
             callgraph: RefCell::new(None),
             dataflow: RefCell::new(None),
             signatures: RefCell::new(None),
+            type_map: RefCell::new(None),
         }
     }
 
@@ -174,6 +180,11 @@ impl CLikeEmitter {
     /// P0-12: Inject the per-callee signature map. The emitter only READS it.
     pub fn set_signatures(&self, map: SignatureMap) {
         *self.signatures.borrow_mut() = Some(map);
+    }
+
+    /// P0-13: Inject the propagated type map. The emitter only READS it.
+    pub fn set_type_map(&self, map: TypeMap) {
+        *self.type_map.borrow_mut() = Some(map);
     }
 
     /// Emit a DecompilerFunction as C-like pseudocode string.
@@ -231,6 +242,9 @@ impl CLikeEmitter {
 
         // P0-12: Emit this function's recovered signature (as a callee).
         self.emit_signature_evidence(func_addr, out);
+
+        // P0-13: Emit propagated type candidates for this function's args/return.
+        self.emit_type_evidence(func_addr, out);
 
         // P0-10.1: Record function behavior evidence
         self.function_behavior
@@ -387,6 +401,56 @@ impl CLikeEmitter {
             "     *   confidence: {}\n",
             sig.confidence.label()
         ));
+        out.push_str("     */\n");
+    }
+
+    /// P0-13: Display propagated type candidates for this function's arg slots
+    /// and return value. Reads the injected TypeMap; never guesses a C type.
+    fn emit_type_evidence(&self, func_addr: u64, out: &mut String) {
+        let guard = self.type_map.borrow();
+        let map = match guard.as_ref() {
+            Some(m) => m,
+            None => return,
+        };
+
+        // Collect arg types for this callee.
+        let mut arg_lines: Vec<String> = Vec::new();
+        for i in 0..16usize {
+            if let Some(cand) = map.param_type(func_addr, i) {
+                if matches!(cand.kind, crate::type_propagation::TypeKind::Unknown) {
+                    continue; // fail-closed: don't print unknown
+                }
+                arg_lines.push(format!(
+                    "     *   arg{}: {} ({})\n",
+                    i,
+                    cand.kind.label(),
+                    cand.confidence.label()
+                ));
+            }
+        }
+        let ret = map.return_type(func_addr);
+        let ret_known = matches!(
+            ret.map(|c| &c.kind),
+            Some(crate::type_propagation::TypeKind::Boolean)
+        );
+
+        if arg_lines.is_empty() && !ret_known {
+            return; // no known type evidence: stay silent
+        }
+
+        out.push_str("    /* P0-13 Type Candidates:\n");
+        for l in &arg_lines {
+            out.push_str(l);
+        }
+        if let Some(cand) = ret {
+            if ret_known {
+                out.push_str(&format!(
+                    "     *   return: {} ({})\n",
+                    cand.kind.label(),
+                    cand.confidence.label()
+                ));
+            }
+        }
         out.push_str("     */\n");
     }
 
