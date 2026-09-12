@@ -1,0 +1,11 @@
+
+running 1 test
+GAP-RM-4 IAT entries: 60
+=== P0-6.7 Batch Decompilation: NtcMach.exe ===
+Total functions: 246
+CallGraph: direct_internal=1175, direct_external=1, indirect_resolved=0, indirect_unknown=395
+
+P0-6.10: Resolved call targets from CallGraph: 1335
+
+  Building function 1/246 (0x10001080)...
+  Building function 51/246 (0x10011200)...
