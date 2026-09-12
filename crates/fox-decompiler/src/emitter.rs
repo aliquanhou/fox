@@ -13,11 +13,17 @@
 //! - No type/variable/argument recovery
 //! - No fixing P0-6.6A nesting gap (flat if/else is OK for now)
 
+use crate::callgraph::DecompilerCallGraph;
 use crate::condition::ConditionRecovery;
 use crate::expression::{CallTarget, Expression};
 use crate::structured_ir::{AssignTarget, DecompilerFunction, Statement, StatementEvidence};
 use std::cell::RefCell;
 use std::collections::HashMap;
+
+/// P0-9.1/P0-9.4: Per-field behavior tuple (four independent counters).
+type FieldBehaviorCounters = (usize, usize, usize, usize);
+/// P0-9.1/P0-9.4: Map (object, offset) -> behavior counters.
+type FieldBehaviorMap = RefCell<HashMap<(String, u64), FieldBehaviorCounters>>;
 
 /// Emitter configuration.
 #[derive(Debug, Clone)]
@@ -93,13 +99,17 @@ pub struct CLikeEmitter {
     field_types: RefCell<HashMap<String, HashMap<u64, String>>>,
     /// P0-9.1: Access pattern evidence per field.
     /// (object, offset) -> (cmp_count, call_count, deref_count, arg_count)
-    field_patterns: RefCell<HashMap<(String, u64), (usize, usize, usize, usize)>>,
+    field_patterns: FieldBehaviorMap,
     /// P0-9.4: SSA behavior evidence per field.
     /// (object, offset) -> (branch_dep, arithmetic, deref, indirect_call)
-    field_behavior: RefCell<HashMap<(String, u64), (usize, usize, usize, usize)>>,
+    field_behavior: FieldBehaviorMap,
     /// P0-10.1: Function behavior evidence.
     /// function_addr -> (reads_count, writes_count, calls_count)
     function_behavior: RefCell<HashMap<u64, (usize, usize, usize)>>,
+    /// P0-11.2.7: Real call graph built from SSA CallStmt (injected by caller).
+    /// When present, the emitter displays REAL caller/callee evidence from edges,
+    /// instead of deriving pseudo-call-graph stats from field accesses.
+    callgraph: RefCell<Option<DecompilerCallGraph>>,
 }
 
 impl Default for CLikeEmitter {
@@ -119,6 +129,7 @@ impl CLikeEmitter {
             field_patterns: RefCell::new(HashMap::new()),
             field_behavior: RefCell::new(HashMap::new()),
             function_behavior: RefCell::new(HashMap::new()),
+            callgraph: RefCell::new(None),
         }
     }
 
@@ -132,7 +143,13 @@ impl CLikeEmitter {
             field_patterns: RefCell::new(HashMap::new()),
             field_behavior: RefCell::new(HashMap::new()),
             function_behavior: RefCell::new(HashMap::new()),
+            callgraph: RefCell::new(None),
         }
+    }
+
+    /// P0-11.2.7: Inject the real call graph. The emitter only READS it.
+    pub fn set_callgraph(&self, graph: DecompilerCallGraph) {
+        *self.callgraph.borrow_mut() = Some(graph);
     }
 
     /// Emit a DecompilerFunction as C-like pseudocode string.
@@ -153,9 +170,9 @@ impl CLikeEmitter {
         self.field_behavior.borrow_mut().clear();
         // P0-10.1: Track function behavior
         let func_addr = func.address;
-        let mut func_reads = 0usize;
-        let mut func_writes = 0usize;
-        let mut func_calls = 0usize;
+        let func_reads = 0usize;
+        let func_writes = 0usize;
+        let func_calls = 0usize;
         if self.config.show_header {
             let name = func.name.as_deref().unwrap_or("unknown");
             out.push_str(&format!("// Function @ 0x{:X} ({})\n", func.address, name));
@@ -182,12 +199,68 @@ impl CLikeEmitter {
         // P0-8.4: Emit structure candidate comment for global objects accessed in this function
         self.emit_structure_candidates(out);
 
+        // P0-11.2.7: Emit REAL call graph evidence (caller/callee from edges).
+        self.emit_callgraph_evidence(func_addr, out);
+
         // P0-10.1: Record function behavior evidence
         self.function_behavior
             .borrow_mut()
             .insert(func_addr, (func_reads, func_writes, func_calls));
 
         out.push_str("}\n");
+    }
+
+    /// P0-11.2.7: Display REAL call graph evidence for this function.
+    ///
+    /// This reads the injected DecompilerCallGraph (built from SSA CallStmt),
+    /// NOT field-access heuristics. It shows real outgoing callees and the
+    /// count of incoming callers. Unknown targets are preserved honestly.
+    fn emit_callgraph_evidence(&self, caller_addr: u64, out: &mut String) {
+        let graph_guard = self.callgraph.borrow();
+        let graph = match graph_guard.as_ref() {
+            Some(g) => g,
+            None => return,
+        };
+
+        let outgoing = graph.callees_of(caller_addr);
+        if outgoing.is_empty() {
+            return; // leaf / no recovered calls: stay silent, fail-closed
+        }
+
+        let incoming_count = graph.callers_of(caller_addr).len();
+        let direct = outgoing
+            .iter()
+            .filter(|e| matches!(e.callee, CallTarget::Address(_)))
+            .count();
+        let symbol = outgoing
+            .iter()
+            .filter(|e| matches!(e.callee, CallTarget::Symbol(_)))
+            .count();
+        let unknown = outgoing
+            .iter()
+            .filter(|e| matches!(e.callee, CallTarget::Unknown))
+            .count();
+
+        out.push_str("    /* P0-11.2.7 Real CallGraph:\n");
+        out.push_str(&format!(
+            "     *   outgoing edges: {} (direct {}, symbol {}, unknown {})\n",
+            outgoing.len(),
+            direct,
+            symbol,
+            unknown
+        ));
+        out.push_str(&format!("     *   incoming callers: {}\n", incoming_count));
+        // List up to first 8 callees for human inspection.
+        out.push_str("     *   callees:\n");
+        for e in outgoing.iter().take(8) {
+            let target = match &e.callee {
+                CallTarget::Address(a) => format!("call_{:X}", a),
+                CallTarget::Symbol(s) => s.clone(),
+                CallTarget::Unknown => "call_unknown".to_string(),
+            };
+            out.push_str(&format!("     *     - {} [{}]\n", target, e.kind.label()));
+        }
+        out.push_str("     */\n");
     }
 
     /// P0-8.4/8.5: Emit structure field clustering as a comment block.
@@ -266,9 +339,7 @@ impl CLikeEmitter {
                     "UNKNOWN"
                 };
 
-                let confidence = if in_cluster && **count >= 5 {
-                    "MEDIUM"
-                } else if **count >= 20 {
+                let confidence = if (in_cluster && **count >= 5) || **count >= 20 {
                     "MEDIUM"
                 } else if **count >= 10 {
                     "LOW-MEDIUM"
@@ -316,13 +387,13 @@ impl CLikeEmitter {
                         ));
                     }
                 }
-                out.push_str("\n");
+                out.push('\n');
             }
 
             // Confidence
             let confidence = if sorted.len() >= 3 && struct_clusters > 0 {
                 "MEDIUM"
-            } else if sorted.len() >= 1 {
+            } else if !sorted.is_empty() {
                 "LOW"
             } else {
                 "NONE"
@@ -359,7 +430,7 @@ impl CLikeEmitter {
             (
                 "leaf-candidate (callgraph-core)",
                 "HIGH",
-                format!("callgraph-core: callee_count=0"),
+                "callgraph-core: callee_count=0".to_string(),
             )
         } else if total_accesses > 5 && total_fields >= 2 {
             (

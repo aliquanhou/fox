@@ -6,6 +6,7 @@
 //! P0-6.6A: Structured IR (aggregate analysis → DecompilerFunction → Statements).
 //! P0-6.6B: C-like Emitter (Structured IR → human-readable pseudocode).
 
+pub mod callgraph;
 pub mod condition;
 pub mod control_structure;
 pub mod dynamic_plugin;
@@ -13,6 +14,9 @@ pub mod emitter;
 pub mod expression;
 pub mod structured_ir;
 
+pub use callgraph::{
+    DecompilerCallEdge, DecompilerCallGraph, DecompilerCallGraphBuilder, DecompilerCallKind,
+};
 pub use condition::{
     recover_all_conditions, recover_condition, Condition, ConditionOperand, ConditionRecovery,
 };

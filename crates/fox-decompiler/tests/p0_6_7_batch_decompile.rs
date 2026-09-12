@@ -119,7 +119,14 @@ fn batch_decompile_all_ntcmach_functions() {
     let mut functions_budget_exhausted = 0;
     let mut functions_empty_output = 0;
 
-    // Process in batches of 50 to monitor progress
+    // P0-11.2.7 Phase 1: Build ALL decompiled functions first (no emit),
+    // so a real call graph can be constructed across the whole program.
+    struct BuiltEntry {
+        addr: u64,
+        name: String,
+        built: Result<BuiltFunction, FunctionResult>,
+    }
+    let mut built_entries: Vec<BuiltEntry> = Vec::new();
     for (idx, func_cfg) in result.cfg.function_cfgs.iter().enumerate() {
         let addr = func_cfg.function_address.0;
         let name = if func_cfg.function_name.is_empty() {
@@ -127,17 +134,46 @@ fn batch_decompile_all_ntcmach_functions() {
         } else {
             func_cfg.function_name.clone()
         };
-
         if idx % 50 == 0 {
             println!(
-                "  Processing function {}/{} (0x{:X})...",
+                "  Building function {}/{} (0x{:X})...",
                 idx + 1,
                 total_functions,
                 addr
             );
         }
+        let built = build_single_function(&result, addr, &name, &call_targets);
+        built_entries.push(BuiltEntry { addr, name, built });
+    }
 
-        let func_result = process_single_function(&result, addr, &name, &call_targets);
+    // P0-11.2.7: Build the REAL call graph from SSA CallStmt across all funcs.
+    let all_funcs: Vec<&fox_decompiler::DecompilerFunction> = built_entries
+        .iter()
+        .filter_map(|e| match &e.built {
+            Ok(b) => Some(&b.func),
+            Err(_) => None,
+        })
+        .collect();
+    let call_graph = fox_decompiler::DecompilerCallGraphBuilder::build(&all_funcs);
+    let (cg_direct, cg_symbol, cg_unknown) = call_graph.kind_counts();
+    println!(
+        "P0-11.2.7 Real CallGraph: edges={} (direct={}, symbol={}, unknown={}), distinct callers={}",
+        call_graph.edge_count(),
+        cg_direct,
+        cg_symbol,
+        cg_unknown,
+        call_graph.caller_count()
+    );
+    println!("");
+
+    // P0-11.2.7 Phase 2: Emit every built function, injecting the real graph.
+    for entry in built_entries {
+        let addr = entry.addr;
+        let name = entry.name;
+        let func_result = match entry.built {
+            Ok(built) => emit_single_function(built, addr, &name, Some(&call_graph)),
+            Err(fr) => fr,
+        };
 
         match func_result.status {
             FunctionStatus::Ok => ok_count += 1,
@@ -345,12 +381,29 @@ fn batch_decompile_all_ntcmach_functions() {
     );
 }
 
-fn process_single_function(
+/// P0-11.2.7: Built-but-not-emitted function, so a real call graph can be
+/// constructed across ALL functions before any emitter reads it.
+struct BuiltFunction {
+    func: fox_decompiler::DecompilerFunction,
+    func_cfg_blocks: usize,
+    ssa_instrs: usize,
+    cs_count: usize,
+    if_count: usize,
+    guard_count: usize,
+    unknown_count: usize,
+    has_return: bool,
+    has_call: bool,
+    has_assign: bool,
+}
+
+/// P0-11.2.7 Phase 1: SSA -> structured IR. Does NOT emit.
+/// Returns Err(FunctionResult) when the function cannot be built.
+fn build_single_function(
     result: &fox_analysis::AnalysisResult,
     addr: u64,
     name: &str,
     call_targets: &std::collections::HashMap<u64, fox_decompiler::CallTarget>,
-) -> FunctionResult {
+) -> Result<BuiltFunction, FunctionResult> {
     let func_cfg = match result
         .cfg
         .function_cfgs
@@ -359,7 +412,7 @@ fn process_single_function(
     {
         Some(f) => f,
         None => {
-            return FunctionResult {
+            return Err(FunctionResult {
                 address: addr,
                 name: name.to_string(),
                 cfg_blocks: 0,
@@ -378,14 +431,14 @@ fn process_single_function(
                 budget_exhausted: false,
                 status: FunctionStatus::Failed,
                 error: Some("CFG not found".to_string()),
-            }
+            })
         }
     };
 
     let ctx = match result.pipeline.function_analysis.get(&addr) {
         Some(c) => c,
         None => {
-            return FunctionResult {
+            return Err(FunctionResult {
                 address: addr,
                 name: name.to_string(),
                 cfg_blocks: func_cfg.blocks.len(),
@@ -404,14 +457,14 @@ fn process_single_function(
                 budget_exhausted: false,
                 status: FunctionStatus::Failed,
                 error: Some("No SSA analysis".to_string()),
-            }
+            })
         }
     };
 
     let ssa = match ctx.ssa.as_ref() {
         Some(s) => s,
         None => {
-            return FunctionResult {
+            return Err(FunctionResult {
                 address: addr,
                 name: name.to_string(),
                 cfg_blocks: func_cfg.blocks.len(),
@@ -430,7 +483,7 @@ fn process_single_function(
                 budget_exhausted: false,
                 status: FunctionStatus::Failed,
                 error: Some("SSA not available".to_string()),
-            }
+            })
         }
     };
 
@@ -530,6 +583,40 @@ fn process_single_function(
         &mut has_assign,
     );
 
+    Ok(BuiltFunction {
+        func,
+        func_cfg_blocks: func_cfg.blocks.len(),
+        ssa_instrs,
+        cs_count,
+        if_count,
+        guard_count,
+        unknown_count,
+        has_return,
+        has_call,
+        has_assign,
+    })
+}
+
+/// P0-11.2.7 Phase 2: Emit a built function, consuming the real call graph.
+fn emit_single_function(
+    built: BuiltFunction,
+    addr: u64,
+    name: &str,
+    callgraph: Option<&fox_decompiler::DecompilerCallGraph>,
+) -> FunctionResult {
+    let BuiltFunction {
+        func,
+        func_cfg_blocks,
+        ssa_instrs,
+        cs_count,
+        if_count,
+        guard_count,
+        unknown_count,
+        has_return,
+        has_call,
+        has_assign,
+    } = built;
+
     // Emit
     let emitter = CLikeEmitter::with_config(EmitterConfig {
         annotate_evidence: false, // clean output for batch stats
@@ -539,6 +626,10 @@ fn process_single_function(
         max_expression_chars: 400,
         max_expression_depth: 8,
     });
+    // P0-11.2.7: Inject the REAL call graph so edges are displayed honestly.
+    if let Some(g) = callgraph {
+        emitter.set_callgraph(g.clone());
+    }
     let output = emitter.emit(&func);
     let output_chars = output.len();
     let output_lines = output.lines().count();
@@ -557,7 +648,7 @@ fn process_single_function(
     FunctionResult {
         address: addr,
         name: name.to_string(),
-        cfg_blocks: func_cfg.blocks.len(),
+        cfg_blocks: func_cfg_blocks,
         ssa_instrs,
         control_structures: cs_count,
         if_count,
