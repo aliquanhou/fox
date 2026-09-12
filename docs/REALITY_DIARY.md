@@ -69,3 +69,12 @@ KeyTable 0→43，DLL 独立工作。
 - tll_<reg>_<version> -> sequential tmp_N (source-style, no register leak).
 - Same SSA value keeps same tmp across function. MSVC cl /c PASS.
 
+
+## RM-8.2: SSA convergence guard (2026-09-12)
+- MSVC /O2 rm8_roundtrip.exe caused analyze_function non-termination.
+- Root cause 1: phi placement worklist (ssa/mod.rs) no iteration bound on broken CFG.
+- Root cause 2: dominance-frontier walk (dominators/mod.rs) idom chain broken -> runner never advances.
+- Fix: bounded phi iteration (blocks*20+200) + visited-set guard in DF walk.
+- Result: rm8 729 functions analyzed in 55s, recovered.c 1.8MB generated. No hang.
+- Known GAP: Function Discovery reports 729 functions for a small PE (false positives from data/jump tables), to fix next.
+

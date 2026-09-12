@@ -138,6 +138,9 @@ impl AnalysisPipeline {
             }
 
             let context = Self::analyze_function(binary, func, func_cfg);
+            if result.functions_analyzed % 50 == 0 {
+                eprintln!("[PIPELINE] analyzed {} / {}", result.functions_analyzed, functions.len());
+            }
             result.function_analysis.insert(addr, context);
             result.functions_analyzed += 1;
         }

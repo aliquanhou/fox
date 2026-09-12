@@ -142,7 +142,11 @@ impl DominatorTree {
                 // Join point: for each predecessor, walk up dominator tree
                 for p in &preds {
                     let mut runner = *p;
+                    let mut walked: HashSet<usize> = HashSet::new();
                     while Some(runner) != idom.get(&b).cloned().unwrap_or(None) {
+                        if !walked.insert(runner) {
+                            break; // GAP-RM-8.2: dominator chain broken/cycle, fail-safe
+                        }
                         df.entry(runner).or_default().insert(b);
                         runner = idom.get(&runner).cloned().unwrap_or(None).unwrap_or(runner);
                         if runner == *p {

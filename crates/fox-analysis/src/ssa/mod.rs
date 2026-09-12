@@ -300,6 +300,7 @@ impl SSAConstructor {
     /// 5. Build use-def and def-use chains
     pub fn construct_proper(ir_func: &IRFunction) -> SSAFunction {
         use crate::dominators::DominatorTree;
+        eprintln!("[SSA] construct_proper: {} blocks", ir_func.basic_blocks.len());
 
         // Step 1: Collect definition blocks
         let mut def_blocks: HashMap<String, HashSet<usize>> = HashMap::new();
@@ -321,19 +322,28 @@ impl SSAConstructor {
             succ_map.insert(block.id, block.successors.clone());
             pred_map.insert(block.id, block.predecessors.clone());
         }
+        eprintln!("[SSA] computing dominators...");
         let dom_tree = DominatorTree::compute(
             &succ_map,
             &pred_map,
             ir_func.entry_block,
             ir_func.basic_blocks.len(),
         );
+        eprintln!("[SSA] dominators done, placing phi...");
 
         // Step 3: Phi placement (iterative dominance frontier algorithm)
         let mut phi_placement: HashMap<usize, HashSet<String>> = HashMap::new();
+        let max_phi_iters = ir_func.basic_blocks.len() * 20 + 200;
         for (var, defs) in &def_blocks {
             let mut worklist: Vec<usize> = defs.iter().cloned().collect();
             let mut has_phi: HashSet<usize> = HashSet::new();
+            let mut phi_iters = 0usize;
             while let Some(block) = worklist.pop() {
+                phi_iters += 1;
+                if phi_iters > max_phi_iters {
+                    eprintln!("[SSA] phi placement NON-CONVERGENCE var={} iters={}, giving up", var, phi_iters);
+                    break;
+                }
                 for &frontier_block in dom_tree.frontier(block) {
                     if !has_phi.contains(&frontier_block) {
                         has_phi.insert(frontier_block);

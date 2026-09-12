@@ -1403,6 +1403,7 @@ pub fn analyze_binary(binary: &Binary) -> FoxResult<AnalysisResult> {
 /// Only callable after Safe Dispatch confirms ExecutionModel::Native.
 fn analyze_binary_native(binary: &Binary) -> AnalysisResult {
     let functions = FunctionDiscovery::discover(binary);
+    eprintln!("[ANALYZE] discovered {} functions", functions.len());
 
     let disasm = create_disassembler(binary.architecture).ok();
 
@@ -1414,18 +1415,24 @@ fn analyze_binary_native(binary: &Binary) -> AnalysisResult {
     };
 
     let cfg = if let Some(d) = disasm.as_ref() {
-        cfg::ControlFlowGraph::build(binary, &functions, d.as_ref())
+        eprintln!("[ANALYZE] building CFG...");
+        let c = cfg::ControlFlowGraph::build(binary, &functions, d.as_ref());
+        eprintln!("[ANALYZE] CFG done");
+        c
     } else {
         cfg::ControlFlowGraph::new()
     };
 
+    eprintln!("[ANALYZE] building call graph...");
     let call_graph =
         callgraph::CallGraph::build(binary, &functions, &cfg.function_cfgs, &import_thunks);
+    eprintln!("[ANALYZE] call graph done");
     let identity_table = build_identity_table(binary, &functions, &call_graph, &import_thunks);
+    eprintln!("[ANALYZE] identity done");
 
-    // P0-4.1: Unified per-function analysis pipeline
-    // IR → SSA → DataFlow → Memory → Evidence, all sharing the same CFG and IR
+    eprintln!("[ANALYZE] running pipeline...");
     let pipeline = pipeline::AnalysisPipeline::run(binary, &functions, &cfg);
+    eprintln!("[ANALYZE] pipeline done");
 
     AnalysisResult {
         functions,
