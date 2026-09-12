@@ -29,6 +29,12 @@ pub enum CExpr {
     },
     /// Dereference: *p.
     Deref(Box<CExpr>),
+    /// Comparison: left op right (op is "==", "<=", ...).
+    Compare {
+        op: String,
+        left: Box<CExpr>,
+        right: Box<CExpr>,
+    },
     /// Function call.
     Call {
         target: String,
@@ -134,9 +140,7 @@ impl IrToC {
                 else_body,
                 ..
             } => {
-                // ConditionRecovery keeps its own structure; degrade to opaque
-                // condition to stay compile-safe without guessing.
-                let cond = CExpr::Unknown;
+                let cond = self.translate_condition(condition);
                 let mut then = Vec::new();
                 for s in then_body {
                     self.translate_stmt(s, &mut then);
@@ -145,7 +149,6 @@ impl IrToC {
                 for s in else_body {
                     self.translate_stmt(s, &mut els);
                 }
-                let _ = condition;
                 out.push(CStmt::If { cond, then, els });
             }
             Statement::GuardClause { body, .. } => {
@@ -181,8 +184,46 @@ impl IrToC {
         }
     }
 
-    fn translate_call(&mut self, target: &CallTarget, args: &[Expression]) -> CExpr {
-        let name = match target {
+    /// RM-7.3: translate a recovered condition into a C comparison.
+    fn translate_condition(&mut self, cond: &crate::condition::ConditionRecovery) -> CExpr {
+        use crate::condition::{ConditionOperand, ConditionRecovery};
+        match cond {
+            ConditionRecovery::Resolved(c) => {
+                use fox_ir::JumpCondition;
+                let op = match c.operator {
+                    JumpCondition::Equal => "==",
+                    JumpCondition::NotEqual => "!=",
+                    JumpCondition::SignedLess | JumpCondition::UnsignedLess => "<",
+                    JumpCondition::SignedLessEqual | JumpCondition::UnsignedLessEqual => "<=",
+                    JumpCondition::SignedGreater | JumpCondition::UnsignedGreater => ">",
+                    JumpCondition::SignedGreaterEqual | JumpCondition::UnsignedGreaterEqual => ">=",
+                    _ => return CExpr::Unknown,
+                };
+                let l = match &c.left {
+                    ConditionOperand::Register { name, version } => {
+                        CExpr::Var(self.tmp_name(name, *version))
+                    }
+                    ConditionOperand::Constant(v) => CExpr::Const(*v),
+                    _ => CExpr::Unknown,
+                };
+                let r = match &c.right {
+                    ConditionOperand::Register { name, version } => {
+                        CExpr::Var(self.tmp_name(name, *version))
+                    }
+                    ConditionOperand::Constant(v) => CExpr::Const(*v),
+                    _ => CExpr::Unknown,
+                };
+                CExpr::Compare {
+                    op: op.to_string(),
+                    left: Box::new(l),
+                    right: Box::new(r),
+                }
+            }
+            _ => CExpr::Unknown,
+        }
+    }
+
+    fn translate_call(&mut self, target: &CallTarget, args: &[Expression]) -> CExpr {        let name = match target {
             CallTarget::Address(a) => format!("sub_{:X}", a),
             CallTarget::Symbol(s) => s.clone(),
             CallTarget::Unknown => "tll_unknown_call".to_string(),
@@ -378,6 +419,13 @@ impl CRenderer {
                 Self::render_expr(inner, out);
                 out.push_str(")))");
             }
+            CExpr::Compare { op, left, right } => {
+                out.push('(');
+                Self::render_expr(left, out);
+                out.push_str(&format!(" {} ", op));
+                Self::render_expr(right, out);
+                out.push(')');
+            }
             CExpr::Call { target, args } => {
                 out.push_str(target);
                 out.push('(');
@@ -408,8 +456,10 @@ impl CRenderer {
                 Self::render_expr(e, out);
                 out.push(';');
             }
-            CStmt::If { then, els, .. } => {
-                out.push_str("if (tll_unknown_op(), 1) {");
+            CStmt::If { cond, then, els, .. } => {
+                out.push_str("if (");
+                Self::render_expr(cond, out);
+                out.push_str(") {");
                 for st in then {
                     out.push('\n');
                     out.push_str("        ");
