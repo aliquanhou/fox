@@ -323,8 +323,6 @@ impl CRenderer {
             }
         }
         let sig = |name: &str| -> String {
-            // Variadic prototype tolerates the fact that different call sites
-            // disagree on arity (SSA argument binding not done yet).
             format!("uint32_t {}(uint32_t, ...)", name)
         };
         for c in &callees {
