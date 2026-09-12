@@ -90,8 +90,8 @@ impl IrToC {
         if let Some(n) = self.var_map.get(&key) {
             return n.clone();
         }
-        // RM-7.4: source-style sequential naming, not register names.
-        let n = format!("tmp_{}", self.next_tmp);
+        // FINAL-B3: local_N naming (source-style)
+        let n = format!("local_{}", self.next_tmp);
         self.next_tmp += 1;
         self.var_map.insert(key, n.clone());
         self.tmps.push(n.clone());
