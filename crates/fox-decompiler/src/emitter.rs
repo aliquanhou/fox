@@ -19,6 +19,7 @@ use crate::dataflow::{
     ArgumentSourceKind, CrossFunctionDataFlowGraph, FlowDetail, ReturnConsumerKind,
 };
 use crate::expression::{CallTarget, Expression};
+use crate::signature::SignatureMap;
 use crate::structured_ir::{AssignTarget, DecompilerFunction, Statement, StatementEvidence};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -116,6 +117,9 @@ pub struct CLikeEmitter {
     /// P0-11.3: Cross-function data-flow graph (argument/return edges), injected
     /// by the caller. The emitter only READS it.
     dataflow: RefCell<Option<CrossFunctionDataFlowGraph>>,
+    /// P0-12: Per-callee function signatures, injected by the caller.
+    /// The emitter only READS it.
+    signatures: RefCell<Option<SignatureMap>>,
 }
 
 impl Default for CLikeEmitter {
@@ -137,6 +141,7 @@ impl CLikeEmitter {
             function_behavior: RefCell::new(HashMap::new()),
             callgraph: RefCell::new(None),
             dataflow: RefCell::new(None),
+            signatures: RefCell::new(None),
         }
     }
 
@@ -152,6 +157,7 @@ impl CLikeEmitter {
             function_behavior: RefCell::new(HashMap::new()),
             callgraph: RefCell::new(None),
             dataflow: RefCell::new(None),
+            signatures: RefCell::new(None),
         }
     }
 
@@ -163,6 +169,11 @@ impl CLikeEmitter {
     /// P0-11.3: Inject the cross-function data-flow graph. The emitter only READS it.
     pub fn set_dataflow(&self, graph: CrossFunctionDataFlowGraph) {
         *self.dataflow.borrow_mut() = Some(graph);
+    }
+
+    /// P0-12: Inject the per-callee signature map. The emitter only READS it.
+    pub fn set_signatures(&self, map: SignatureMap) {
+        *self.signatures.borrow_mut() = Some(map);
     }
 
     /// Emit a DecompilerFunction as C-like pseudocode string.
@@ -217,6 +228,9 @@ impl CLikeEmitter {
 
         // P0-11.3: Emit cross-function data-flow evidence (argument/return).
         self.emit_dataflow_evidence(func_addr, out);
+
+        // P0-12: Emit this function's recovered signature (as a callee).
+        self.emit_signature_evidence(func_addr, out);
 
         // P0-10.1: Record function behavior evidence
         self.function_behavior
@@ -333,6 +347,45 @@ impl CLikeEmitter {
         out.push_str(&format!(
             "     *   return used: condition {}, instruction {}, ignored {}\n",
             ret_condition, ret_instruction, ret_none
+        ));
+        out.push_str("     */\n");
+    }
+
+    /// P0-12: Display this function's recovered signature (as a callee).
+    /// Reads the injected SignatureMap; never infers names or types itself.
+    fn emit_signature_evidence(&self, func_addr: u64, out: &mut String) {
+        let map_guard = self.signatures.borrow();
+        let map = match map_guard.as_ref() {
+            Some(m) => m,
+            None => return,
+        };
+        let sig = match map.get(func_addr) {
+            Some(s) => s,
+            None => return, // no callers observed this function: stay silent
+        };
+
+        out.push_str("    /* P0-12 Function Signature:\n");
+        if sig.parameters.is_empty() {
+            out.push_str("     *   params: (none recovered)\n");
+        } else {
+            out.push_str("     *   params:\n");
+            for p in &sig.parameters {
+                out.push_str(&format!(
+                    "     *     arg{}: {} ({}, {} call sites)\n",
+                    p.index,
+                    p.location.label(),
+                    p.source.label(),
+                    p.call_sites
+                ));
+            }
+        }
+        out.push_str(&format!(
+            "     *   return: {}\n",
+            sig.return_evidence.label()
+        ));
+        out.push_str(&format!(
+            "     *   confidence: {}\n",
+            sig.confidence.label()
         ));
         out.push_str("     */\n");
     }

@@ -13,6 +13,7 @@ pub mod dataflow;
 pub mod dynamic_plugin;
 pub mod emitter;
 pub mod expression;
+pub mod signature;
 pub mod structured_ir;
 
 pub use callgraph::{
@@ -35,6 +36,10 @@ pub use dynamic_plugin::{
 };
 pub use emitter::{emit_c_like, emit_c_like_clean, CLikeEmitter, EmitterConfig};
 pub use expression::{BinaryOp, CallTarget, Expression, ExpressionRecovery, PhiIncoming, UnaryOp};
+pub use signature::{
+    FunctionParameter, FunctionSignature, FunctionSignatureBuilder, ParameterLocation,
+    ReturnEvidence, SignatureConfidence, SignatureMap,
+};
 pub use structured_ir::{
     AssignTarget, CallBehavior, DecompilerFunction, FunctionEvidence, Statement, StatementEvidence,
     StructuredIRBudget, StructuredIRBuilder, VariableOrigin,

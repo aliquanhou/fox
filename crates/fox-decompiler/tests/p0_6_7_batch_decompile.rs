@@ -179,6 +179,16 @@ fn batch_decompile_all_ntcmach_functions() {
         df_comp,
         df_unk
     );
+
+    // P0-12: Build per-callee function signatures on top of the dataflow graph.
+    let sig_map =
+        fox_decompiler::FunctionSignatureBuilder::build(&all_funcs, &data_flow, &call_graph);
+    println!(
+        "P0-12 Function Signatures: callees={} (with >=1 param: {}, >=2 params: {})",
+        sig_map.len(),
+        sig_map.with_param_count(1),
+        sig_map.with_param_count(2)
+    );
     println!("");
 
     // P0-11.2.7 Phase 2: Emit every built function, injecting the real graph.
@@ -186,9 +196,14 @@ fn batch_decompile_all_ntcmach_functions() {
         let addr = entry.addr;
         let name = entry.name;
         let func_result = match entry.built {
-            Ok(built) => {
-                emit_single_function(built, addr, &name, Some(&call_graph), Some(&data_flow))
-            }
+            Ok(built) => emit_single_function(
+                built,
+                addr,
+                &name,
+                Some(&call_graph),
+                Some(&data_flow),
+                Some(&sig_map),
+            ),
             Err(fr) => fr,
         };
 
@@ -621,6 +636,7 @@ fn emit_single_function(
     name: &str,
     callgraph: Option<&fox_decompiler::DecompilerCallGraph>,
     dataflow: Option<&fox_decompiler::CrossFunctionDataFlowGraph>,
+    signatures: Option<&fox_decompiler::SignatureMap>,
 ) -> FunctionResult {
     let BuiltFunction {
         func,
@@ -651,6 +667,10 @@ fn emit_single_function(
     // P0-11.3: Inject cross-function data-flow graph (argument/return).
     if let Some(df) = dataflow {
         emitter.set_dataflow(df.clone());
+    }
+    // P0-12: Inject per-callee signature map.
+    if let Some(sm) = signatures {
+        emitter.set_signatures(sm.clone());
     }
     let output = emitter.emit(&func);
     let output_chars = output.len();

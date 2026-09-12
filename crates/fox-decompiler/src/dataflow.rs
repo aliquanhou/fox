@@ -28,7 +28,7 @@ pub enum FlowKind {
 }
 
 /// Coarse origin class of an argument expression. Evidence only, not a type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ArgumentSourceKind {
     /// The argument is an immediate constant (e.g. push 0).
     Constant,
@@ -134,6 +134,11 @@ impl CrossFunctionDataFlowGraph {
 
     pub fn edge_count(&self) -> usize {
         self.edges.len()
+    }
+
+    /// Read-only access to all edges (for cross-layer aggregation, e.g. signatures).
+    pub fn edges(&self) -> &[DataFlowEdge] {
+        &self.edges
     }
 
     /// Edges belonging to a caller function (both argument and return).
