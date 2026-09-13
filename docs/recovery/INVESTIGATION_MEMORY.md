@@ -42,29 +42,15 @@
 - Confidence: medium
 - Priority: P1
 
-### INV-008: Pattern File Format Analysis
-- Question: What do the pattern files look like?
-- Evidence: Real data files in data/ directory
-- Evidence ID: E-FORMAT-0008
-- Files found:
-  - AT.FSZ (89377 bytes) - compressed/encrypted (random bytes)
-  - AT.BMZ (1690 bytes) - auxiliary
-  - patternset.dat (40512 bytes) - structured!
-  - P_NTC.SET (205524 bytes) - settings
-  - tension.dat (2048 bytes)
-  - Wt_dvc.dat (47500 bytes)
-  - MD_EDIT.fs (2429540 bytes) - large pattern editor data
-- patternset.dat header analysis:
-  offset 0x00: 00 00 00 00
-  offset 0x04: 0x0200 = 512 (likely needle count or pattern width)
-  offset 0x08: 0x3E8 = 1000 (likely course count or pattern height)
-  offset 0x10: 0x28 = 40 (likely color count?)
-  offset 0x14: 0x06 = 6
+### INV-009: File Read Core Found
+- Question: Which function reads pattern files?
+- Evidence: fn_41AB70 = 177 lines, 1x ReadFile, 1x CloseHandle
+- Evidence ID: E-READER-0009
 - Conclusion:
-  FACT: patternset.dat has structured header with numeric fields
-  FACT: AT.FSZ is compressed/encrypted
-  HYPOTHESIS: patternset.dat = pattern set index/metadata
-  HYPOTHESIS: AT.FSZ = actual pattern data (compressed)
-  UNKNOWN: exact format details
-- Confidence: medium
-- Priority: P0 - this is the Pattern Compiler input
+  FACT: fn_41AB70 is the only function in NtcMach with ReadFile
+  FACT: 4 callees: fn_4280A0, fn_427C90, fn_430680, fn_41B9B0
+  HYPOTHESIS: This is the pattern file loader
+  HYPOTHESIS: fn_41B9B0 may be file path constructor
+  UNKNOWN: which file it opens
+- Confidence: high
+- Priority: P0 - Pattern Reader confirmed
