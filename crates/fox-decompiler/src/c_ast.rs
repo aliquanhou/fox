@@ -333,7 +333,7 @@ impl CRenderer {
         for c in &callees {
             out.push_str(&format!("extern {};\n", sig(c)));
         }
-        out.push('\n');
+        out.push_str("/* Windows API / system calls (semantic type recovery pending) */\n\n");
 
         for f in funcs {
             out.push_str("static uint32_t ");
