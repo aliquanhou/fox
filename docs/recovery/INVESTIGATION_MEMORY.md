@@ -42,13 +42,29 @@
 - Confidence: medium
 - Priority: P1
 
-### INV-007: NTCDLLG Call Chain
-- Question: How does the call graph work?
-- Evidence: fn_100187E1 → fn_10018708 → 13 callees
+### INV-008: Pattern File Format Analysis
+- Question: What do the pattern files look like?
+- Evidence: Real data files in data/ directory
+- Evidence ID: E-FORMAT-0008
+- Files found:
+  - AT.FSZ (89377 bytes) - compressed/encrypted (random bytes)
+  - AT.BMZ (1690 bytes) - auxiliary
+  - patternset.dat (40512 bytes) - structured!
+  - P_NTC.SET (205524 bytes) - settings
+  - tension.dat (2048 bytes)
+  - Wt_dvc.dat (47500 bytes)
+  - MD_EDIT.fs (2429540 bytes) - large pattern editor data
+- patternset.dat header analysis:
+  offset 0x00: 00 00 00 00
+  offset 0x04: 0x0200 = 512 (likely needle count or pattern width)
+  offset 0x08: 0x3E8 = 1000 (likely course count or pattern height)
+  offset 0x10: 0x28 = 40 (likely color count?)
+  offset 0x14: 0x06 = 6
 - Conclusion:
-  FACT: fn_100187E1 is thin wrapper (103 lines)
-  FACT: fn_10018708 is main dispatcher (73 lines, 13 callees)
-  FACT: callees are all small (20-259 lines) with only CloseHandle
-  HYPOTHESIS: Device commands are encapsulated in small functions
-  UNKNOWN: exact command mapping
-- Confidence: high
+  FACT: patternset.dat has structured header with numeric fields
+  FACT: AT.FSZ is compressed/encrypted
+  HYPOTHESIS: patternset.dat = pattern set index/metadata
+  HYPOTHESIS: AT.FSZ = actual pattern data (compressed)
+  UNKNOWN: exact format details
+- Confidence: medium
+- Priority: P0 - this is the Pattern Compiler input
