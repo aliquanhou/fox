@@ -88,4 +88,39 @@ impl LlmProvider {
         report.software_identity = Some(identity);
         Ok(report)
     }
+
+    /// Generic chat - send messages array, get text response
+    pub async fn chat(&self, messages: &[(&str, &str)]) -> Result<String, LlmError> {
+        let key = self.api_key.as_ref().ok_or(LlmError::NoApiKey)?;
+
+        let msg_json: Vec<serde_json::Value> = messages.iter()
+            .map(|(role, content)| serde_json::json!({"role": role, "content": content}))
+            .collect();
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("{}/chat/completions", self.base_url))
+            .bearer_auth(key)
+            .json(&serde_json::json!({
+                "model": self.model,
+                "messages": msg_json,
+                "temperature": 0.1
+            }))
+            .send()
+            .await
+            .map_err(|e| LlmError::RequestFailed(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(LlmError::RequestFailed(format!("{}: {}", status, body)));
+        }
+
+        let json: serde_json::Value = resp.json().await.map_err(|_| LlmError::InvalidResponse)?;
+        let content = json["choices"][0]["message"]["content"]
+            .as_str()
+            .ok_or(LlmError::InvalidResponse)?
+            .to_string();
+        Ok(content)
+    }
 }
