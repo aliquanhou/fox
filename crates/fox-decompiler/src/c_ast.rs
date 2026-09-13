@@ -348,7 +348,15 @@ impl CRenderer {
         out.push_str("/* Windows API / system calls (semantic type recovery pending) */\n\n");
 
         for f in funcs {
-            out.push_str(&format!("/* {name} - semantic recovery in progress */\n", name = f.name));
+            // E1: scan function body for known API consumers
+            let body: String = f.stmts.iter().map(|s| Self::stmt_to_str(s)).collect();
+            let has_close_handle = body.contains("CloseHandle");
+            let note = if has_close_handle {
+                "E1: HANDLE consumer (CloseHandle)"
+            } else {
+                "semantic recovery in progress"
+            };
+            out.push_str(&format!("/* {name} {note} */\n", name = f.name, note = note));
             out.push_str("static uint32_t ");
             out.push_str(&f.name);
             out.push_str("(uint32_t arg0 /* HANDLE? */, ...) {\n");
@@ -473,6 +481,12 @@ impl CRenderer {
             }
             CExpr::Unknown => out.push_str("0"),
         }
+    }
+
+    fn stmt_to_str(s: &CStmt) -> String {
+        let mut buf = String::new();
+        Self::render_stmt(s, &mut buf, 0);
+        buf
     }
 
     fn render_stmt(s: &CStmt, out: &mut String, _depth: usize) {
