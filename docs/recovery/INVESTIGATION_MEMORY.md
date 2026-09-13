@@ -102,3 +102,20 @@
   UNKNOWN: exact module responsibilities
 - Confidence: low
 - Priority: P1
+
+### INV-016: Business DLL Scan
+- Question: What do business DLLs contain?
+- Evidence: String scan results
+- Evidence ID: E-DLL-SCAN-0016
+- Findings:
+  NTCDLLC: 0 matching functions/strings (may be exported only)
+  NTCDLLM: 0 matching
+  NTCDLLV: 0 matching
+  NTCDLL_M3: 242 functions
+  NTCDLL_M4: 279 functions
+- Conclusion:
+  FACT: M3/M4 have real functions
+  FACT: C/M/V may be export-only wrappers
+  UNKNOWN: full module mapping
+- Confidence: low
+- Priority: P1
