@@ -311,6 +311,11 @@ impl CRenderer {
         let mut out = String::new();
         out.push_str("/* FOX reconstructed C — RM-7 (auto-generated) */\n");
         out.push_str("#include <stdint.h>\n\n");
+        // FINAL-B5: Windows-style type aliases (semantic readability)
+        out.push_str("typedef uint32_t HANDLE;\n");
+        out.push_str("typedef uint32_t DWORD;\n");
+        out.push_str("typedef int BOOL;\n");
+        out.push_str("typedef uint32_t UINT;\n\n");
         out.push_str("static void tll_unknown_op(void) {}\n");
         out.push_str("static uint32_t tll_unknown_call() { return 0; }\n\n");
 
