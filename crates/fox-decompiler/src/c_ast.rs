@@ -344,7 +344,7 @@ impl CRenderer {
             if !f.tmps.is_empty() {
                 out.push_str("    uint32_t ");
                 out.push_str(&f.tmps.join(", "));
-                out.push_str(";\n");
+                out.push_str("; /* local variables */\n");
                 out.push_str("    uint32_t tll_discard = 0;\n");
             }
             for s in &f.stmts {
