@@ -34,12 +34,19 @@
 - Question: What does this function do?
 - Evidence: 667 lines, 29x DeviceIoControl, 1x WriteFile, 4x CloseHandle
 - Evidence ID: E-DEVICE-0004
+- Real IOCTL codes extracted:
+  - 0x222403 (2237443) - Write Memory
+  - 0x222404 (2237444) - Send Data
+  - 0x222408 (2237448) - Receive Data
+  - 0x22240C (2237452) - Read Memory
+  - 0x222418 (2237464) - Control Command
+  - 0x1004A9C0 (268741056) - Test/Query
 - Conclusion:
   FACT: NTCDLLG.DLL device communication core
   FACT: 29 DeviceIoControl calls in one function
-  FACT: Called by 2 functions (fn_100014A0, fn_10011210)
+  FACT: 6 real IOCTL codes extracted from binary
   HYPOTHESIS: Machine protocol layer (knitting machine I/O)
-  UNKNOWN: IOCTL codes, data structures, protocol format
+  UNKNOWN: exact data structures, protocol format
 - Confidence: HIGH
 - Next: find callers of this function
 - Priority: P0 - this is the hardware boundary
