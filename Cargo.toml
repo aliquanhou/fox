@@ -9,7 +9,7 @@ members = [
     "crates/fox-analysis",
     "crates/fox-decompiler",
     "crates/fox-project",
-    "apps/cli",
+    "apps/cli", "crates/fox-semantic-ai",
 ]
 
 [workspace.package]
