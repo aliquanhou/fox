@@ -61,3 +61,17 @@
   UNKNOWN: exact record format
 - Confidence: medium
 - Priority: P1
+
+### INV-013: Pattern Parser Callers
+- Question: Who calls the Pattern Parser?
+- Evidence: fn_429F00 has 2 callers
+- Evidence ID: E-PARSER-CALLERS-0013
+- Findings:
+  FACT: fn_455E4C (main entry)
+  FACT: fn_428240 (15 lines thin wrapper)
+- Conclusion:
+  FACT: Parser is called from main entry and from a wrapper
+  HYPOTHESIS: fn_428240 may be used for re-parse or reload
+  UNKNOWN: Pattern Compiler location
+- Confidence: medium
+- Priority: P1 - need to find where parsed data goes
