@@ -75,3 +75,15 @@
   UNKNOWN: Pattern Compiler location
 - Confidence: medium
 - Priority: P1 - need to find where parsed data goes
+
+### INV-014: Cross-module Analysis
+- Question: Where is the business logic?
+- Evidence: NtcMach has 0 machine-related strings, 0 direct NTCDLLG calls
+- Evidence ID: E-CROSS-0014
+- Findings:
+  FACT: NtcMach.exe = GUI shell only
+  FACT: Business strings are in resources or other DLLs
+  HYPOTHESIS: Pattern Compiler and Machine Logic are in separate DLLs
+  UNKNOWN: which DLL does what
+- Confidence: medium
+- Priority: P1 - need to analyze other DLLs
