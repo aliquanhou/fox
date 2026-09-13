@@ -42,15 +42,22 @@
 - Confidence: medium
 - Priority: P1
 
-### INV-011: fn_429F00 Role Confirmed (DeepSeek)
-- Question: What is fn_429F00's role?
-- Evidence: 1504 lines, 13 callees, end of file-read chain
-- Evidence ID: E-PARSER-0011
-- DeepSeek conclusion:
-  FACT: fn_429F00 is terminal node of CreateFile→ReadFile chain
-  FACT: 1504 lines (2nd largest), 13 callees
-  HYPOTHESIS (strong): Pattern File Parser (Option A)
-  HYPOTHESIS: May do parse + partial compile in one pass
-  UNKNOWN: exact byte-level operations
-- Confidence: high
-- Priority: P0 - Pattern Parser confirmed as fn_429F00
+### INV-012: Parser Subfunctions Analysis
+- Question: What do the parser subfunctions do?
+- Evidence: fn_429F00 has 7 callees analyzed
+- Evidence ID: E-PARSE-0012
+- Findings:
+  fn_428FE0 (504 lines) - largest subparser
+  fn_427B00 (204 lines)
+  fn_4292E0 (169 lines)
+  fn_428B60 (151 lines)
+  fn_429880 (146 lines)
+  fn_4299E0 (151 lines)
+  fn_429710 (34 lines)
+- Conclusion:
+  FACT: 7 subparsers form a hierarchy
+  FACT: No string literals in subparsers (pure binary parsing)
+  HYPOTHESIS: Each subparser handles different record types
+  UNKNOWN: exact record format
+- Confidence: medium
+- Priority: P1
