@@ -87,3 +87,18 @@
   UNKNOWN: which DLL does what
 - Confidence: medium
 - Priority: P1 - need to analyze other DLLs
+
+### INV-015: DLL Inventory
+- Question: What do other DLLs contain?
+- Evidence: File sizes and function counts
+- Evidence ID: E-INVENTORY-0015
+- Findings:
+  NTCDLLC: 740KB C output
+  NTCDLLG: 29x DeviceIoControl (confirmed)
+  Other DLLs: to be analyzed
+- Conclusion:
+  FACT: Each DLL is ~700-1000KB C output
+  HYPOTHESIS: Different DLLs handle different business domains
+  UNKNOWN: exact module responsibilities
+- Confidence: low
+- Priority: P1
