@@ -98,3 +98,11 @@ KeyTable 0→43，DLL 独立工作。
 - Round-trip: rm8 output matches baseline
 - This is the Binary Recovery Baseline. No future change may break this.
 
+
+## v1.17.1-R1-FIX (8cdfd85)
+- CreateFileA producer -> (reg, version) -> semantic_names -> file_handle
+- tmp_name() priority: semantic_names > var_map
+- SSA version isolation: eax_7->file_handle, eax_8->local_N
+- G test PASS, cl /c 0 errors
+- Status: CONDITIONAL PASS (Evidence chain established)
+
