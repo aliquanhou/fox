@@ -45,17 +45,24 @@ Stitch Inspection
 ## 7. Business Core Candidates (R2-3 Discovery)
 | Candidate | Evidence | Role | Confidence |
 |---|---|---|---|
-| MACH_DATA2 | string constant | machine data identifier | medium |
+| MACH_DATA2 | string @ 0x45A078, 0 direct code refs | machine data identifier | UNKNOWN (no refs found) |
 | data\%s | path pattern | pattern data file | medium |
 | MemoryIndex / IsMemorySave | API functions | pattern memory management | medium |
 | ramsend.bin / net send | strings | USB data transfer to machine | high |
 | TRANSFER | knitting term | stitch transfer operation | medium |
 | stitch | knitting term | loop/coil | medium |
-| machine_process | main loop string | machine control loop | medium |
+| machine_process | main loop string | machine control loop | UNKNOWN (GUI class candidate) |
 | DMachine_f00~f06 | frame names | machine control data frames | medium |
 
 **Business Domain**: industrial knitting machine control and data transfer
 **Confidence**: medium
+
+## 8. MACH_DATA2 Investigation (R2-3 Phase 2)
+- **FACT**: MACH_DATA2 string exists at VA 0x45A078
+- **FACT**: 0 direct code references found (push/mov of its address)
+- **HYPOTHESIS**: may be referenced via indirect addressing or data table
+- **UNKNOWN**: what function uses it, what data it represents
+- **Note**: string exists but no direct xref → likely data-table reference, not code constant
 - **fn_41EDF0**:
   - FACT: references "machine_process" string, calls LoadStringA/LoadIconA/LoadCursorA
   - HYPOTHESIS: window class preparation
