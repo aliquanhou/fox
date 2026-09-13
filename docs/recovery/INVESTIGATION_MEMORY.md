@@ -42,19 +42,21 @@
 - Confidence: medium
 - Priority: P1
 
-### INV-009: File Read Core Found
-- Question: Which function reads pattern files?
-- Evidence: fn_41AB70 = 177 lines, 1x ReadFile, 1x CloseHandle
-- Evidence ID: E-READER-0009
-- Key findings:
-  FACT: fn_41AB70 calls wsprintfA (path string formatting)
-  FACT: fn_41AB70 calls fn_4280A0(4639008) - 0x46CC60
-  FACT: Only caller = fn_455E4C
-  FACT: fn_455E4C is the entry point with CreateFileA
+### INV-010: File Processing Call Chain
+- Question: What happens after file is read?
+- Evidence: Deep call chain from fn_41AB70
+- Evidence ID: E-CHAIN-0010
+- Chain discovered:
+  fn_41AB70 (177 lines, ReadFile)
+    → fn_4280A0 (106 lines)
+      → fn_428160 (65 lines)
+        → fn_4281F0 (35 lines)
+          → fn_429F00 (1504 lines! 2nd largest function)
+          → fn_428240
 - Conclusion:
-  FACT: Path string is dynamically formatted via wsprintfA
-  FACT: File open → read chain: fn_455E4C → fn_41AB70 → ReadFile
-  HYPOTHESIS: fn_4280A0 processes file content after read
-  UNKNOWN: exact file path format
+  FACT: File data flows through 5 levels of function calls
+  FACT: fn_429F00 is the 2nd largest function (1504 lines)
+  HYPOTHESIS: fn_429F00 is the actual Pattern Parser/Decoder
+  UNKNOWN: exact transformation
 - Confidence: high
-- Priority: P0 - Pattern Reader confirmed
+- Priority: P0 - fn_429F00 is the next investigation target
