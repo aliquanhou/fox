@@ -73,10 +73,7 @@ User edits pattern
 4. **BC-001 GUI** - lowest priority (just interface)
 5. **BC-005 Inspection** - diagnostic feature
 
-## 8. Remaining GAPs
-- GAP-001: String XRef ✅ CLOSED
-- GAP-005: Data XRef Engine ⬜ NOT SEALED
-- GAP: Unicode string extraction
-- GAP: Resource extraction
-- GAP: Compiler identification
-- GAP: Machine protocol decode
+## 9. Autonomous Investigation Progress
+- **CreateFileA**: 2 calls, filename @ 0x461040 (not ASCII string - dynamic path?)
+- **ReadFile**: 1 call found
+- **Next**: trace which function calls CreateFileA → pattern file load candidate
