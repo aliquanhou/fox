@@ -30,23 +30,18 @@
 - Confidence: low
 - Next: verify what files it opens
 
-### INV-004: fn_1000F2F0 (NTCDLLG.DLL) ⭐ DEVICE I/O CORE
-- Question: What does this function do?
-- Evidence: 667 lines, 29x DeviceIoControl, 1x WriteFile, 4x CloseHandle
-- Evidence ID: E-DEVICE-0004
-- Real IOCTL codes extracted:
-  - 0x222403 (2237443) - Write Memory
-  - 0x222404 (2237444) - Send Data
-  - 0x222408 (2237448) - Receive Data
-  - 0x22240C (2237452) - Read Memory
-  - 0x222418 (2237464) - Control Command
-  - 0x1004A9C0 (268741056) - Test/Query
-- Conclusion:
-  FACT: NTCDLLG.DLL device communication core
-  FACT: 29 DeviceIoControl calls in one function
-  FACT: 6 real IOCTL codes extracted from binary
-  HYPOTHESIS: Machine protocol layer (knitting machine I/O)
-  UNKNOWN: exact data structures, protocol format
-- Confidence: HIGH
-- Next: find callers of this function
-- Priority: P0 - this is the hardware boundary
+### INV-005: NTCDLLG Architecture Analysis (DeepSeek)
+- Question: What is the overall architecture?
+- Evidence: 3 callers of fn_1000F2F0, 6 real IOCTL codes
+- Evidence ID: E-ARCH-0005
+- DeepSeek conclusion:
+  FACT: fn_1000F2F0 = Device I/O HAL (29x DeviceIoControl)
+  FACT: 3 callers = narrow interface design
+  HYPOTHESIS: fn_100187E1 (41k lines) = main orchestration/knitting state machine
+  HYPOTHESIS: fn_10001280 = init/configuration
+  HYPOTHESIS: fn_10011210 = control/command channel
+  HYPOTHESIS: Pattern Compiler sits above fn_100187E1
+  UNKNOWN: exact location of compiler
+- Confidence: high (architecture), medium (compiler location)
+- Data flow: App → Orchestrator → HAL → Driver → Hardware
+- Priority: P0 - architecture now clear
