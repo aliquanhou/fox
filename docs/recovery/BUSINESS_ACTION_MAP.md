@@ -74,6 +74,22 @@ User edits pattern
 5. **BC-005 Inspection** - diagnostic feature
 
 ## 9. Autonomous Investigation Progress
-- **CreateFileA**: 2 calls, filename @ 0x461040 (not ASCII string - dynamic path?)
+- **CreateFileA**: 2 calls, filename @ 0x461040 (dynamic path?)
 - **ReadFile**: 1 call found
-- **Next**: trace which function calls CreateFileA → pattern file load candidate
+- **fn_41A870**: file open function (Pattern Load candidate)
+- **NTCDLLG.DLL**: Windows service + device I/O management (DeepSeek)
+  - Service management: CreateService/ControlService/StartService
+  - Device I/O: CreateFile/DeviceIoControl/ReadFile/WriteFile
+  - Threading: CriticalSection, InterlockedIncrement
+  - GUI: FindWindow, Shell_NotifyIcon
+
+## 10. Module Map
+| Module | Role | Confidence |
+|---|---|---|
+| NtcMach.exe | GUI main application | high |
+| NTCDLLG.DLL | Service + Device I/O core | medium |
+| KeyTable.exe | Hotkey configuration | medium |
+| NTCDLLA1~A6 | Function modules | unknown |
+| NTCDLLC.DLL | Unknown | unknown |
+| NTCDLLM.DLL | Unknown | unknown |
+| NTCDLLV.DLL | Unknown | unknown |
