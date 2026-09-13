@@ -152,3 +152,22 @@
   UNKNOWN: exact role of each
 - Confidence: medium
 - Priority: P0 - these are the algorithm heart
+
+### INV-019: Core Algorithm Function Analysis
+- Question: What do the 5 core functions do?
+- Evidence: API call scan
+- Evidence ID: E-CORE-ANALYSIS-0019
+- Findings:
+  All 5 functions: 0 API calls, pure computation
+  fn_100065C0: 16 internal calls (most complex orchestrator)
+  fn_1000A560: 12 internal calls
+  fn_10008620: 12 internal calls
+  fn_100075A0: 9 internal calls
+  fn_1000B4E0: 6 internal calls (leaf computation)
+- Conclusion:
+  FACT: All core functions are pure computation (no I/O)
+  HYPOTHESIS: fn_100065C0 = main algorithm orchestrator
+  HYPOTHESIS: fn_1000B4E0 = leaf computation kernel
+  UNKNOWN: exact algorithm semantics
+- Confidence: medium
+- Priority: P0
