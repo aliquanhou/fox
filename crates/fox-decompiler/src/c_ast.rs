@@ -363,7 +363,7 @@ impl CRenderer {
             if !f.tmps.is_empty() {
                 out.push_str("    uint32_t ");
                 out.push_str(&f.tmps.join(", "));
-                out.push_str("; /* local vars; first often = HANDLE from CreateFile */\n");
+                out.push_str("; /* E3: first local often = file_handle (CloseHandle consumer) */\n");
                 out.push_str("    uint32_t tll_discard = 0;\n");
             }
             for s in &f.stmts {
