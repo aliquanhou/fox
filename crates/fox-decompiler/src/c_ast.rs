@@ -361,16 +361,28 @@ impl CRenderer {
             out.push_str(&f.name);
             out.push_str("(uint32_t arg0 /* HANDLE? */, ...) {\n");
             if !f.tmps.is_empty() {
+                // v1.17.1: local_0 -> file_handle when CloseHandle consumer exists
+                let tmps: Vec<String> = if has_close_handle {
+                    f.tmps.iter().map(|t| if t == "local_0" { "file_handle".to_string() } else { t.clone() }).collect()
+                } else {
+                    f.tmps.clone()
+                };
                 out.push_str("    uint32_t ");
-                out.push_str(&f.tmps.join(", "));
-                out.push_str("; /* E3: first local often = file_handle (CloseHandle consumer) */\n");
+                out.push_str(&tmps.join(", "));
+                out.push_str("; /* v1.17.1: file_handle = CloseHandle consumer */\n");
                 out.push_str("    uint32_t tll_discard = 0;\n");
             }
+            // v1.17.1: render body then replace local_0 refs with file_handle
+            let mut body_buf = String::new();
             for s in &f.stmts {
-                out.push_str("    ");
-                Self::render_stmt(s, &mut out, 1);
-                out.push('\n');
+                body_buf.push_str("    ");
+                Self::render_stmt(s, &mut body_buf, 1);
+                body_buf.push('\n');
             }
+            if has_close_handle {
+                body_buf = body_buf.replace("local_0", "file_handle");
+            }
+            out.push_str(&body_buf);
             out.push_str("}\n\n");
         }
         out
