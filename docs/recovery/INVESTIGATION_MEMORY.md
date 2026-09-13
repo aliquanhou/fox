@@ -232,3 +232,19 @@
   UNKNOWN: exact algorithm purpose
 - Confidence: medium
 - Priority: P1
+
+### INV-024: Control Flow Analysis
+- Question: What is the control flow pattern?
+- Evidence: if/while/case counts
+- Evidence ID: E-CONTROL-FLOW-0024
+- Findings:
+  FACT: 122 if statements
+  FACT: 0 while loops
+  FACT: 16 case-like comparisons
+- Conclusion:
+  FACT: No loops = straight-line with many branches
+  HYPOTHESIS: This is a state machine / decoder table
+  HYPOTHESIS: Each case handles one pattern record type
+  UNKNOWN: exact state transitions
+- Confidence: medium
+- Priority: P0
