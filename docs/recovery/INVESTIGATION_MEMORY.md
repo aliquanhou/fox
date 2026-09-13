@@ -217,3 +217,18 @@
   UNKNOWN: exact algorithm type
 - Confidence: medium
 - Priority: P0
+
+### INV-023: XOR Pattern Analysis
+- Question: What is the XOR doing?
+- Evidence: XOR operation patterns
+- Evidence ID: E-XOR-PAT-0023
+- Findings:
+  FACT: 0 pure local^local XOR
+  FACT: 54 XOR with constant (mostly ^0 = no-op)
+- Conclusion:
+  FACT: Most XOR are compiler artifacts (^0 optimization)
+  HYPOTHESIS: This is not encoding/obfuscation
+  HYPOTHESIS: Algorithm is pure arithmetic/data movement
+  UNKNOWN: exact algorithm purpose
+- Confidence: medium
+- Priority: P1
