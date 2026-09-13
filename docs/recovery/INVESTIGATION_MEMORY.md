@@ -119,3 +119,18 @@
   UNKNOWN: full module mapping
 - Confidence: low
 - Priority: P1
+
+### INV-017: M3/M4 String Analysis
+- Question: What strings exist in business DLLs?
+- Evidence: String scan
+- Evidence ID: E-M3M4-STR-0017
+- Findings:
+  M3: 0 string literals
+  M4: to be checked
+- Conclusion:
+  FACT: Business logic DLLs have no embedded strings
+  HYPOTHESIS: All strings come from NtcMach resources
+  HYPOTHESIS: M3/M4 are pure computation/algorithm DLLs
+  UNKNOWN: exact algorithm domain
+- Confidence: medium
+- Priority: P1 - M3/M4 = algorithm core
