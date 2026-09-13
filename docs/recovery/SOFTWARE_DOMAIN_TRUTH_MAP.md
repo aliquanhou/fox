@@ -42,7 +42,20 @@ Stitch Inspection
 - Send (发送)
 - Camera Check (相机检查)
 
-## 6. First Function-level Evidence
+## 7. Business Core Candidates (R2-3 Discovery)
+| Candidate | Evidence | Role | Confidence |
+|---|---|---|---|
+| MACH_DATA2 | string constant | machine data identifier | medium |
+| data\%s | path pattern | pattern data file | medium |
+| MemoryIndex / IsMemorySave | API functions | pattern memory management | medium |
+| ramsend.bin / net send | strings | USB data transfer to machine | high |
+| TRANSFER | knitting term | stitch transfer operation | medium |
+| stitch | knitting term | loop/coil | medium |
+| machine_process | main loop string | machine control loop | medium |
+| DMachine_f00~f06 | frame names | machine control data frames | medium |
+
+**Business Domain**: industrial knitting machine control and data transfer
+**Confidence**: medium
 - **fn_41EDF0**:
   - FACT: references "machine_process" string, calls LoadStringA/LoadIconA/LoadCursorA
   - HYPOTHESIS: window class preparation
