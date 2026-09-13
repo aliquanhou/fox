@@ -337,6 +337,7 @@ impl CRenderer {
         out.push_str("/* Windows API / system calls (semantic type recovery pending) */\n\n");
 
         for f in funcs {
+            out.push_str(&format!("/* {name} */\n", name = f.name));
             out.push_str("static uint32_t ");
             out.push_str(&f.name);
             out.push_str("(uint32_t arg0, ...) {\n");
