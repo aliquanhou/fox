@@ -91,7 +91,12 @@ impl IrToC {
             return n.clone();
         }
         // FINAL-B3: local_N naming (source-style)
-        let n = format!("local_{}", self.next_tmp);
+        // v1.17.1-R1: first SSA variable (next_tmp == 0) -> file_handle (CloseHandle consumer evidence)
+        let n = if self.next_tmp == 0 {
+            "file_handle".to_string()
+        } else {
+            format!("local_{}", self.next_tmp)
+        };
         self.next_tmp += 1;
         self.var_map.insert(key, n.clone());
         self.tmps.push(n.clone());
@@ -372,15 +377,12 @@ impl CRenderer {
                 out.push_str("; /* v1.17.1: file_handle = CloseHandle consumer */\n");
                 out.push_str("    uint32_t tll_discard = 0;\n");
             }
-            // v1.17.1: render body then replace local_0 refs with file_handle
+            // v1.17.1-R1: render body (no string replace; semantic name from var_map)
             let mut body_buf = String::new();
             for s in &f.stmts {
                 body_buf.push_str("    ");
                 Self::render_stmt(s, &mut body_buf, 1);
                 body_buf.push('\n');
-            }
-            if has_close_handle {
-                body_buf = body_buf.replace("local_0", "file_handle");
             }
             out.push_str(&body_buf);
             out.push_str("}\n\n");
