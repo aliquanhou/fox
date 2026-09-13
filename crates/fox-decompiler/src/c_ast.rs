@@ -328,7 +328,8 @@ impl CRenderer {
             }
         }
         let sig = |name: &str| -> String {
-            format!("uint32_t {}(uint32_t, ...)", name)
+            // FINAL-B2: HANDLE return for API (typedef uint32_t HANDLE = compatible)
+            format!("HANDLE {}(HANDLE, ...)", name)
         };
         for c in &callees {
             out.push_str(&format!("extern {};\n", sig(c)));
