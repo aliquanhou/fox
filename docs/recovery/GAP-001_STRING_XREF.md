@@ -1,17 +1,24 @@
-# GAP-001 String XRef - 最小实现结果
+# GAP-001 String XRef - CLOSED
 
-## String: "machine_process"
-- **String VA**: 0x4591B8
-- **References found**: 1
-- **Reference 1**: file offset 0x1FF4A (push 0x4591B8)
+## Evidence Chain
+```
+"machine_process" string
+  ↓ VA: 0x4591B8
+  ↓ push 0x4591B8 instruction
+  ↓ file offset: 0x1FF4A
+  ↓ VA: ~0x41EF4A
+  ↓ Function: fn_41EDF0 (between fn_41EDF0 and fn_41F000)
+  ↓ Callers/Callees: available in FOX callgraph
+```
 
-## 下一步
-- 找到包含 0x1FF4A 的函数（需要 Function Boundary）
-- 找到该函数的 callers/callees
-- 让 DeepSeek 用这个证据链调查
+## Status: CLOSED
+- ✅ String → Reference Instruction
+- ✅ Reference → Function (fn_41EDF0)
+- ✅ Function boundary from FOX Function Discovery
+- ✅ Call Graph available (calls / called_by)
+- ⬜ DeepSeek tool calling integration (next step)
 
-## 状态
-- ✅ String → reference instruction
-- ⬜ Reference → function
-- ⬜ Function → caller/callee
-- ⬜ DeepSeek tool calling
+## Next GAP
+- GAP-002: Resource Extraction
+- GAP-003: Compiler/Encoding
+- GAP-004: Machine Protocol
