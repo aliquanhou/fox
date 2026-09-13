@@ -351,7 +351,7 @@ impl CRenderer {
             out.push_str(&format!("/* {name} */\n", name = f.name));
             out.push_str("static uint32_t ");
             out.push_str(&f.name);
-            out.push_str("(uint32_t arg0, ...) {\n");
+            out.push_str("(uint32_t arg0 /* HANDLE? */, ...) {\n");
             if !f.tmps.is_empty() {
                 out.push_str("    uint32_t ");
                 out.push_str(&f.tmps.join(", "));
