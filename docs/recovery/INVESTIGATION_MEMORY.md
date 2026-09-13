@@ -188,3 +188,14 @@
   UNKNOWN: exact state machine
 - Confidence: medium
 - Priority: P0
+
+### INV-021: Helper Function Chain
+- Question: What does fn_10001180 do?
+- Evidence: 53 lines, 1 callee
+- Evidence ID: E-HELPER-0021
+- Findings:
+  FACT: fn_10001180: 53 lines, calls fn_10001210
+  HYPOTHESIS: This is a small initialization/setup helper
+  UNKNOWN: exact purpose
+- Confidence: low
+- Priority: P2
