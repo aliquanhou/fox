@@ -263,3 +263,17 @@
   UNKNOWN: exact semantics
 - Confidence: medium
 - Priority: P1
+
+### INV-026: State Block Analysis
+- Question: What does State 1 do?
+- Evidence: State 1 block code
+- Evidence ID: E-STATE1-0026
+- Findings:
+  FACT: State 1 = simple variable assignment (local_1062 = local_1044)
+  FACT: No complex arithmetic in this block
+- Conclusion:
+  FACT: States are simple data copy/move operations
+  HYPOTHESIS: Each state copies one pattern field to output buffer
+  UNKNOWN: exact field mapping
+- Confidence: medium
+- Priority: P2
