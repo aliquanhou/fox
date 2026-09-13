@@ -99,7 +99,7 @@ impl IrToC {
     }
 
     pub fn translate_function(&mut self, func: &DecompilerFunction) -> CFunction {
-        let name = format!("sub_{:X}", func.address);
+        let name = format!("fn_{:X}", func.address);
         let mut stmts = Vec::new();
         for stmt in &func.statements {
             self.translate_stmt(stmt, &mut stmts);
@@ -226,7 +226,7 @@ impl IrToC {
     }
 
     fn translate_call(&mut self, target: &CallTarget, args: &[Expression]) -> CExpr {        let name = match target {
-            CallTarget::Address(a) => format!("sub_{:X}", a),
+            CallTarget::Address(a) => format!("fn_{:X}", a),
             CallTarget::Symbol(s) => s.clone(),
             CallTarget::Unknown => "tll_unknown_call".to_string(),
         };
