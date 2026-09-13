@@ -42,21 +42,15 @@
 - Confidence: medium
 - Priority: P1
 
-### INV-010: File Processing Call Chain
-- Question: What happens after file is read?
-- Evidence: Deep call chain from fn_41AB70
-- Evidence ID: E-CHAIN-0010
-- Chain discovered:
-  fn_41AB70 (177 lines, ReadFile)
-    → fn_4280A0 (106 lines)
-      → fn_428160 (65 lines)
-        → fn_4281F0 (35 lines)
-          → fn_429F00 (1504 lines! 2nd largest function)
-          → fn_428240
-- Conclusion:
-  FACT: File data flows through 5 levels of function calls
-  FACT: fn_429F00 is the 2nd largest function (1504 lines)
-  HYPOTHESIS: fn_429F00 is the actual Pattern Parser/Decoder
-  UNKNOWN: exact transformation
+### INV-011: fn_429F00 Role Confirmed (DeepSeek)
+- Question: What is fn_429F00's role?
+- Evidence: 1504 lines, 13 callees, end of file-read chain
+- Evidence ID: E-PARSER-0011
+- DeepSeek conclusion:
+  FACT: fn_429F00 is terminal node of CreateFile→ReadFile chain
+  FACT: 1504 lines (2nd largest), 13 callees
+  HYPOTHESIS (strong): Pattern File Parser (Option A)
+  HYPOTHESIS: May do parse + partial compile in one pass
+  UNKNOWN: exact byte-level operations
 - Confidence: high
-- Priority: P0 - fn_429F00 is the next investigation target
+- Priority: P0 - Pattern Parser confirmed as fn_429F00
