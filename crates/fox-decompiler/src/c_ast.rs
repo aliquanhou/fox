@@ -316,6 +316,17 @@ impl CRenderer {
         out.push_str("typedef uint32_t DWORD;\n");
         out.push_str("typedef int BOOL;\n");
         out.push_str("typedef uint32_t UINT;\n\n");
+        // FINAL-D: generic object struct (all field_0xNN live here)
+        out.push_str("typedef struct {\n");
+        out.push_str("    uint32_t field_0x00;\n");
+        out.push_str("    uint32_t field_0x04;\n");
+        out.push_str("    uint32_t field_0x08;\n");
+        out.push_str("    uint32_t field_0x0C;\n");
+        out.push_str("    uint32_t field_0x10;\n");
+        out.push_str("    uint32_t field_0x14;\n");
+        out.push_str("    uint32_t field_0x18;\n");
+        out.push_str("    uint32_t field_0x1C;\n");
+        out.push_str("} FoxObject;\n\n");
         out.push_str("static void tll_unknown_op(void) {}\n");
         out.push_str("static uint32_t tll_unknown_call() { return 0; }\n\n");
 
