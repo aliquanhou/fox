@@ -42,6 +42,11 @@ Stitch Inspection
 - Send (发送)
 - Camera Check (相机检查)
 
+## 6. First Function-level Evidence
+- **fn_41EDF0**: Window class registration (LoadString/LoadIcon/LoadCursor)
+- "machine_process" string referenced in window class registration
+- Likely: main window class name = "machine_process"
+
 ## 6. Known GAPs
 - String → function cross-reference not implemented
 - Resource extraction (BMP/TBL/DAT) not implemented
