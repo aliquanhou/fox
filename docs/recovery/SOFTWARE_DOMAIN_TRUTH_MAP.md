@@ -43,9 +43,14 @@ Stitch Inspection
 - Camera Check (相机检查)
 
 ## 6. First Function-level Evidence
-- **fn_41EDF0**: Window class registration (LoadString/LoadIcon/LoadCursor)
-- "machine_process" string referenced in window class registration
-- Likely: main window class name = "machine_process"
+- **fn_41EDF0**:
+  - FACT: references "machine_process" string, calls LoadStringA/LoadIconA/LoadCursorA
+  - HYPOTHESIS: window class preparation
+  - UNKNOWN: whether it ultimately calls RegisterClassEx (not found in direct calls)
+- **machine_process**:
+  - FACT: string at VA 0x4591B8, referenced by fn_41EDF0
+  - HYPOTHESIS: window class name
+  - UNKNOWN: actual data flow into lpszClassName
 
 ## 6. Known GAPs
 - String → function cross-reference not implemented
