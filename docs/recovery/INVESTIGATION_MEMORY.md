@@ -171,3 +171,20 @@
   UNKNOWN: exact algorithm semantics
 - Confidence: medium
 - Priority: P0
+
+### INV-020: Algorithm Orchestrator Signature
+- Question: What does fn_100065C0 take as input?
+- Evidence: Function signature
+- Evidence ID: E-ORCH-SIG-0020
+- Findings:
+  FACT: fn_100065C0(uint32_t arg0 /* HANDLE? */, ...)
+  FACT: Calls fn_10001180(268569696)
+  FACT: Calls wsprintfA
+  FACT: 750+ local variables
+- Conclusion:
+  FACT: arg0 is likely a context/state pointer
+  HYPOTHESIS: This function processes pattern state machine
+  HYPOTHESIS: 750 locals = complex state tracking
+  UNKNOWN: exact state machine
+- Confidence: medium
+- Priority: P0
