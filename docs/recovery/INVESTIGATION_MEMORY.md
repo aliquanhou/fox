@@ -46,11 +46,15 @@
 - Question: Which function reads pattern files?
 - Evidence: fn_41AB70 = 177 lines, 1x ReadFile, 1x CloseHandle
 - Evidence ID: E-READER-0009
+- Key findings:
+  FACT: fn_41AB70 calls wsprintfA (path string formatting)
+  FACT: fn_41AB70 calls fn_4280A0(4639008) - 0x46CC60
+  FACT: Only caller = fn_455E4C
+  FACT: fn_455E4C is the entry point with CreateFileA
 - Conclusion:
-  FACT: fn_41AB70 is the only function in NtcMach with ReadFile
-  FACT: 4 callees: fn_4280A0, fn_427C90, fn_430680, fn_41B9B0
-  HYPOTHESIS: This is the pattern file loader
-  HYPOTHESIS: fn_41B9B0 may be file path constructor
-  UNKNOWN: which file it opens
+  FACT: Path string is dynamically formatted via wsprintfA
+  FACT: File open → read chain: fn_455E4C → fn_41AB70 → ReadFile
+  HYPOTHESIS: fn_4280A0 processes file content after read
+  UNKNOWN: exact file path format
 - Confidence: high
 - Priority: P0 - Pattern Reader confirmed
