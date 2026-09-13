@@ -1,11 +1,11 @@
-//! FOX Final Reconstruction — C AST Layer (RM-6).
+﻿//! FOX Final Reconstruction 鈥?C AST Layer (RM-6).
 //!
 //! Proper reconstruction: SSA Evidence -> C AST -> C Renderer.
 //! No regex patching of emitter text. Every node traces back to a
 //! structured Statement/Expression.
 //!
 //! Unknowns degrade to a single opaque call `tll_unknown_op()` instead of
-//! fabricating logic — compile-safe AND evidence-preserving.
+//! fabricating logic 鈥?compile-safe AND evidence-preserving.
 
 use crate::expression::{BinaryOp, CallTarget, Expression, UnaryOp};
 use crate::structured_ir::{AssignTarget, DecompilerFunction, Statement};
@@ -40,7 +40,7 @@ pub enum CExpr {
         target: String,
         args: Vec<CExpr>,
     },
-    /// Unresolved — rendered as tll_unknown_op() result.
+    /// Unresolved 鈥?rendered as tll_unknown_op() result.
     Unknown,
 }
 
@@ -55,7 +55,7 @@ pub enum CStmt {
         els: Vec<CStmt>,
     },
     Return(Option<CExpr>),
-    /// An unresolved statement — rendered as tll_unknown_op();
+    /// An unresolved statement 鈥?rendered as tll_unknown_op();
     Unknown,
 }
 
@@ -72,6 +72,7 @@ pub struct CFunction {
 pub struct IrToC {
     /// (register, version) -> tmp name.
     var_map: HashMap<(String, u32), String>,
+    semantic_names: HashMap<(String, u32), String>,
     tmps: Vec<String>,
     next_tmp: usize,
 }
@@ -80,6 +81,7 @@ impl IrToC {
     pub fn new() -> Self {
         Self {
             var_map: HashMap::new(),
+            semantic_names: HashMap::new(),
             tmps: Vec::new(),
             next_tmp: 0,
         }
@@ -87,6 +89,9 @@ impl IrToC {
 
     fn tmp_name(&mut self, reg: &str, version: u32) -> String {
         let key = (reg.to_string(), version);
+        if let Some(n) = self.semantic_names.get(&key) {
+            return n.clone();
+        }
         if let Some(n) = self.var_map.get(&key) {
             return n.clone();
         }
@@ -124,6 +129,14 @@ impl IrToC {
         match stmt {
             Statement::Assign { lhs, rhs, .. } => {
                 let rhs = self.translate_expr(rhs);
+                // R1-FIX: CreateFileA producer -> bind lhs SSA identity to file_handle
+                if let CExpr::Call { target, .. } = &rhs {
+                    if target == "CreateFileA" {
+                        if let AssignTarget::Variable { name, version, .. } = lhs {
+                            self.semantic_names.insert((name.clone(), *version), "file_handle".to_string());
+                        }
+                    }
+                }
                 match lhs {
                     AssignTarget::Variable { name, version, .. } => {
                         let lhs = CExpr::Var(self.tmp_name(name, *version));
@@ -314,7 +327,7 @@ pub struct CRenderer;
 impl CRenderer {
     pub fn render(funcs: &[CFunction]) -> String {
         let mut out = String::new();
-        out.push_str("/* FOX reconstructed C — RM-7 (auto-generated) */\n");
+        out.push_str("/* FOX reconstructed C 鈥?RM-7 (auto-generated) */\n");
         out.push_str("#include <stdint.h>\n\n");
         // FINAL-B5: Windows-style type aliases (semantic readability)
         out.push_str("typedef uint32_t HANDLE;\n");
