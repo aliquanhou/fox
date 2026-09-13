@@ -248,3 +248,18 @@
   UNKNOWN: exact state transitions
 - Confidence: medium
 - Priority: P0
+
+### INV-025: Decoder State IDs
+- Question: What are the decoder states?
+- Evidence: Case values
+- Evidence ID: E-STATE-IDS-0025
+- Findings:
+  FACT: 8 unique state values: 1,3,5,7,9,11,16,97
+  FACT: Odd-numbered states (1,3,5,7,9,11) suggest paired states
+- Conclusion:
+  FACT: 8 states = 8 record types to decode
+  HYPOTHESIS: Odd states = 8 knitting operation types
+  HYPOTHESIS: State 97 = special/error
+  UNKNOWN: exact semantics
+- Confidence: medium
+- Priority: P1
