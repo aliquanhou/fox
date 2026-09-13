@@ -199,3 +199,21 @@
   UNKNOWN: exact purpose
 - Confidence: low
 - Priority: P2
+
+### INV-022: Compute Kernel Arithmetic Analysis
+- Question: What does the compute kernel do?
+- Evidence: Operator frequency
+- Evidence ID: E-KERNEL-ARITH-0022
+- Findings:
+  FACT: + : 425 operations
+  FACT: ^ : 105 XOR operations
+  FACT: - : 63 subtractions
+  FACT: | : 54 bitwise OR
+  FACT: * : 36 multiplications
+- Conclusion:
+  FACT: Heavy arithmetic + bitwise operations
+  HYPOTHESIS: This is data transformation / encoding algorithm
+  HYPOTHESIS: XOR suggests encoding/obfuscation
+  UNKNOWN: exact algorithm type
+- Confidence: medium
+- Priority: P0
