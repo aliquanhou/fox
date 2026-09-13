@@ -30,18 +30,25 @@
 - Confidence: low
 - Next: verify what files it opens
 
-### INV-005: NTCDLLG Architecture Analysis (DeepSeek)
-- Question: What is the overall architecture?
-- Evidence: 3 callers of fn_1000F2F0, 6 real IOCTL codes
-- Evidence ID: E-ARCH-0005
-- DeepSeek conclusion:
-  FACT: fn_1000F2F0 = Device I/O HAL (29x DeviceIoControl)
-  FACT: 3 callers = narrow interface design
-  HYPOTHESIS: fn_100187E1 (41k lines) = main orchestration/knitting state machine
-  HYPOTHESIS: fn_10001280 = init/configuration
-  HYPOTHESIS: fn_10011210 = control/command channel
-  HYPOTHESIS: Pattern Compiler sits above fn_100187E1
-  UNKNOWN: exact location of compiler
-- Confidence: high (architecture), medium (compiler location)
-- Data flow: App → Orchestrator → HAL → Driver → Hardware
-- Priority: P0 - architecture now clear
+### INV-006: NtcMach.exe File I/O Analysis
+- Question: Where is the file I/O core?
+- Evidence: Only fn_41A870 has CreateFileA (2 calls, 42 lines)
+- Evidence ID: E-FILEIO-0006
+- Conclusion:
+  FACT: fn_41A870 = file open wrapper (2x CreateFileA)
+  FACT: No file name strings (dynamic construction)
+  HYPOTHESIS: Generic file open utility, called by pattern load/save
+  UNKNOWN: which files it opens
+- Confidence: medium
+- Priority: P1
+
+### INV-007: NTCDLLG Call Chain
+- Question: How does the call graph work?
+- Evidence: fn_100187E1 → fn_10018708 → 13 callees
+- Conclusion:
+  FACT: fn_100187E1 is thin wrapper (103 lines)
+  FACT: fn_10018708 is main dispatcher (73 lines, 13 callees)
+  FACT: callees are all small (20-259 lines) with only CloseHandle
+  HYPOTHESIS: Device commands are encapsulated in small functions
+  UNKNOWN: exact command mapping
+- Confidence: high
