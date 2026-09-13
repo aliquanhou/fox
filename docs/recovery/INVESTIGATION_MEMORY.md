@@ -134,3 +134,21 @@
   UNKNOWN: exact algorithm domain
 - Confidence: medium
 - Priority: P1 - M3/M4 = algorithm core
+
+### INV-018: M4 Core Algorithm Functions
+- Question: Where is the knitting algorithm?
+- Evidence: Largest functions in M4
+- Evidence ID: E-M4-CORE-0018
+- Findings:
+  fn_1000A560: 1542 lines
+  fn_1000B4E0: 1536 lines
+  fn_10008620: 1427 lines
+  fn_100065C0: 1171 lines
+  fn_100075A0: 1140 lines
+- Conclusion:
+  FACT: 5 core functions >1000 lines
+  HYPOTHESIS: These are the knitting algorithm cores
+  HYPOTHESIS: One may be Pattern Compiler
+  UNKNOWN: exact role of each
+- Confidence: medium
+- Priority: P0 - these are the algorithm heart
