@@ -1,7 +1,7 @@
-# FOX v1.1 Final Delivery Report
+# FOX v1.4 Final Delivery Report
 
 ## 基线
-- Git: 33d361a
+- Git: 857621a
 - Date: 2026-09-13
 
 ## 能力矩阵
@@ -15,17 +15,17 @@
 | DataFlow | ✅ |
 | Signature | ✅ |
 | Type Candidate | ✅ |
-| Variable Recovery | ✅ |
-| Object/Field Recovery | ✅ |
+| Variable Recovery | ✅ (local_N) |
+| Function Naming | ✅ (fn_N) |
+| Windows Type Aliases | ✅ (HANDLE/DWORD/BOOL) |
+| Object/Field Recovery | ✅ (struct.field) |
 | Memory Operand Recovery | ✅ |
 | IAT/API Recovery | ✅ |
 | C AST | ✅ |
 | C Compiler (MSVC) | ✅ |
 | Round Trip (rm8) | ✅ |
-| Struct.field Access | ✅ |
 | Type Recovery (semantic) | ⬜ |
 | Struct Definition | ⬜ |
-| Function Naming | ⬜ |
 | C++ Recovery | ⬜ |
 
 ## 14/14 PE Decompile Results
