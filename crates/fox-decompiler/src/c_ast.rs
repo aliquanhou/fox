@@ -475,6 +475,10 @@ impl CRenderer {
                     if i > 0 {
                         out.push_str(", ");
                     }
+                    // E2: CloseHandle arg0 = HANDLE consumer evidence
+                    if target == "CloseHandle" && i == 0 {
+                        out.push_str("/* HANDLE consumer */ ");
+                    }
                     Self::render_expr(a, out);
                 }
                 out.push(')');
